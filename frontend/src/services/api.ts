@@ -33,6 +33,18 @@ export interface ChatResponse {
   error?: string;
 }
 
+export interface SqlExecuteRequest {
+  sql: string;
+}
+
+export interface SqlExecuteResponse {
+  sql: string;
+  data?: Record<string, unknown>[];
+  echarts_config?: Record<string, unknown>;
+  error?: string;
+  execution_time?: number;
+}
+
 class ApiService {
   private baseUrl: string;
 
@@ -96,6 +108,13 @@ class ApiService {
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     return this.request<ChatResponse>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
+  }
+
+  async executeSql(request: SqlExecuteRequest): Promise<SqlExecuteResponse> {
+    return this.request<SqlExecuteResponse>('/api/execute-sql', {
       method: 'POST',
       body: JSON.stringify(request),
     });

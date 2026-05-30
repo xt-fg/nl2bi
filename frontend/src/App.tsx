@@ -5,7 +5,7 @@ import type { HistoryItem } from './components/QueryHistory';
 import ResultDisplay from './components/ResultDisplay';
 import ChatPanel from './components/ChatPanel';
 import apiService from './services/api';
-import type { QueryResponse } from './services/api';
+import type { QueryResponse, SqlExecuteResponse } from './services/api';
 
 const App: React.FC = () => {
   const [result, setResult] = useState<QueryResponse | null>(null);
@@ -55,6 +55,18 @@ const App: React.FC = () => {
     [],
   );
 
+  const handleSqlRerun = useCallback((response: SqlExecuteResponse) => {
+    // 将 SQL 执行结果转换为 QueryResponse 格式
+    const queryResponse: QueryResponse = {
+      sql: response.sql,
+      data: response.data,
+      echarts_config: response.echarts_config,
+      error: response.error,
+      execution_time: response.execution_time,
+    };
+    setResult(queryResponse);
+  }, []);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* 头部 */}
@@ -102,7 +114,7 @@ const App: React.FC = () => {
 
           {/* 右侧：结果展示 + 对话 */}
           <div className="lg:col-span-3 space-y-6">
-            <ResultDisplay result={result} isLoading={isLoading} />
+            <ResultDisplay result={result} isLoading={isLoading} onSqlRerun={handleSqlRerun} />
             <ChatPanel queryResult={result} onSendMessage={handleChatMessage} />
           </div>
         </div>

@@ -7,6 +7,7 @@ from app.models.schemas import (
     QueryRequest, QueryResponse,
     ChatRequest, ChatResponse,
     TableInfo, SchemaResponse,
+    SqlExecuteRequest, SqlExecuteResponse,
 )
 from app.agent.workflow import run_workflow
 from app.agent.tools import get_llm
@@ -104,6 +105,56 @@ async def chat_endpoint(request: ChatRequest):
         error_msg = f"处理聊天请求时发生错误: {e}"
         logger.exception(error_msg)
         return ChatResponse(response="", error=error_msg)
+
+
+@router.post("/execute-sql", response_model=SqlExecuteResponse)
+async def execute_sql_endpoint(request: SqlExecuteRequest):
+    """直接执行 SQL 并返回结果和图表配置"""
+    logger.info("收到 SQL 执行请求: %s", request.sql)
+    start_time = time.time()
+
+    try:
+        import pandas as pd
+        df = db_manager.execute_query(request.sql)
+
+        if df.empty:
+            return SqlExecuteResponse(
+                sql=request.sql,
+                data=[],
+                echarts_config=None,
+                error="查询返回空结果",
+                execution_time=time.time() - start_time,
+            )
+
+        data = df.to_dict("records")
+        for record in data:
+            for key, value in record.items():
+                if isinstance(value, pd.Timestamp):
+                    record[key] = value.isoformat()
+
+        # 生成图表配置
+        from app.agent.tools import generate_echarts_config
+        echarts_config = generate_echarts_config(request.sql, data)
+
+        execution_time = time.time() - start_time
+        logger.info("SQL 执行完成，返回 %d 行，耗时: %.2f秒", len(data), execution_time)
+
+        return SqlExecuteResponse(
+            sql=request.sql,
+            data=data,
+            echarts_config=echarts_config,
+            execution_time=execution_time,
+        )
+
+    except Exception as e:
+        execution_time = time.time() - start_time
+        error_msg = f"SQL 执行错误: {e}"
+        logger.exception(error_msg)
+        return SqlExecuteResponse(
+            sql=request.sql,
+            error=error_msg,
+            execution_time=execution_time,
+        )
 
 
 @router.get("/tables", response_model=list[TableInfo])

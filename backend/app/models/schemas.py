@@ -39,3 +39,17 @@ class SchemaResponse(BaseModel):
     """数据库 schema 响应"""
     tables: List[TableInfo] = Field(..., description="表信息列表")
     description: Optional[str] = Field(None, description="数据库描述")
+
+
+class SqlExecuteRequest(BaseModel):
+    """SQL 直接执行请求"""
+    sql: str = Field(..., description="SQL 语句", min_length=1)
+
+
+class SqlExecuteResponse(BaseModel):
+    """SQL 直接执行响应"""
+    sql: str = Field(..., description="执行的 SQL")
+    data: Optional[List[Dict[str, Any]]] = Field(None, description="查询结果")
+    echarts_config: Optional[Dict[str, Any]] = Field(None, description="Echarts 配置")
+    error: Optional[str] = Field(None, description="错误信息")
+    execution_time: Optional[float] = Field(None, description="执行时间")
