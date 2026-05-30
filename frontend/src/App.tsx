@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import QueryInput from './components/QueryInput';
 import ResultDisplay from './components/ResultDisplay';
+import ChatPanel from './components/ChatPanel';
 import apiService from './services/api';
 import type { QueryResponse } from './services/api';
 
@@ -26,6 +27,23 @@ const App: React.FC = () => {
       });
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleChatMessage = async (
+    message: string,
+    context: QueryResponse
+  ): Promise<string> => {
+    try {
+      const response = await apiService.chat({ message, context });
+      if (response.error) {
+        throw new Error(response.error);
+      }
+      return response.response;
+    } catch (err) {
+      const errorMessage =
+        err instanceof Error ? err.message : '处理消息失败，请稍后重试';
+      throw new Error(errorMessage);
     }
   };
 
@@ -108,9 +126,10 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* 右侧：结果展示 */}
-          <div className="lg:col-span-2">
+          {/* 右侧：结果展示和对话 */}
+          <div className="lg:col-span-2 space-y-6">
             <ResultDisplay result={result} isLoading={isLoading} />
+            <ChatPanel queryResult={result} onSendMessage={handleChatMessage} />
           </div>
         </div>
       </main>

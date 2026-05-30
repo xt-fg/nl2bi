@@ -23,6 +23,16 @@ export interface SchemaResponse {
   description?: string;
 }
 
+export interface ChatRequest {
+  message: string;
+  context: QueryResponse;
+}
+
+export interface ChatResponse {
+  response: string;
+  error?: string;
+}
+
 class ApiService {
   private baseUrl: string;
 
@@ -82,6 +92,13 @@ class ApiService {
 
   async healthCheck(): Promise<{ status: string; version: string }> {
     return this.request<{ status: string; version: string }>('/health');
+  }
+
+  async chat(request: ChatRequest): Promise<ChatResponse> {
+    return this.request<ChatResponse>('/api/chat', {
+      method: 'POST',
+      body: JSON.stringify(request),
+    });
   }
 }
 
