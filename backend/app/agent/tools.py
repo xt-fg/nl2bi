@@ -24,7 +24,7 @@ def get_llm() -> ChatOpenAI:
             api_key=OPENAI_API_KEY,
             base_url=OPENAI_API_BASE,
             temperature=0,
-            max_tokens=2000,
+            max_tokens=4096,
         )
     return _llm_instance
 
@@ -156,28 +156,44 @@ def _parse_echarts_json(raw: str) -> dict:
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
 
-    # 直接尝试
+    # 1. 直接尝试
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # 尝试提取第一个 JSON 对象
+    # 2. 提取第一个 JSON 对象（贪婪匹配）
     match = re.search(r'\{[\s\S]*\}', cleaned)
     if match:
+        candidate = match.group()
+        # 2a. 直接解析
         try:
-            return json.loads(match.group())
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+        # 2b. 修复尾部逗号
+        fixed = re.sub(r',\s*([}\]])', r'\1', candidate)
+        try:
+            return json.loads(fixed)
+        except json.JSONDecodeError:
+            pass
+        # 2c. 修复单引号为双引号
+        fixed2 = candidate.replace("'", '"')
+        try:
+            return json.loads(fixed2)
         except json.JSONDecodeError:
             pass
 
-    # 尝试修复尾部逗号
-    fixed = re.sub(r',\s*([}\]])', r'\1', cleaned)
-    try:
-        return json.loads(fixed)
-    except json.JSONDecodeError:
-        pass
+    # 3. 逐行查找不合法的控制字符
+    cleaned2 = re.sub(r'[\x00-\x1f\x7f]', ' ', cleaned)
+    match2 = re.search(r'\{[\s\S]*\}', cleaned2)
+    if match2:
+        try:
+            return json.loads(match2.group())
+        except json.JSONDecodeError:
+            pass
 
-    logger.warning("JSON 解析失败，原始内容前200字符: %s", raw[:200])
+    logger.warning("JSON 解析失败，原始内容前300字符: %s", raw[:300])
     return _default_echarts_config("图表配置解析失败")
 
 
