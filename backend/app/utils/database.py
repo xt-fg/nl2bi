@@ -1,9 +1,13 @@
+import logging
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from typing import List, Dict, Any, Optional
 
 from app.core.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
@@ -17,6 +21,7 @@ class DatabaseManager:
         self.engine = create_engine(DATABASE_URL, echo=False)
         self._create_tables()
         self._insert_sample_data()
+        logger.info("数据库初始化完成")
 
     def _create_tables(self):
         """创建表结构"""
@@ -247,14 +252,33 @@ class DatabaseManager:
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
 
+        logger.debug("执行 SQL: %s", sql)
+        self._check_sql_safety(sql)
         try:
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql))
                 columns = result.keys()
                 data = result.fetchall()
-                return pd.DataFrame(data, columns=columns)
+                df = pd.DataFrame(data, columns=columns)
+                logger.debug("查询返回 %d 行", len(df))
+                return df
         except Exception as e:
-            raise Exception(f"SQL 执行错误: {str(e)}")
+            logger.error("SQL 执行错误: %s", e)
+            raise Exception(f"SQL 执行错误: {e}") from e
+
+    @staticmethod
+    def _check_sql_safety(sql: str):
+        """检查 SQL 安全性，拦截危险操作"""
+        normalized = sql.strip().upper()
+        # 只允许 SELECT 和 WITH (CTE)
+        if not (normalized.startswith("SELECT") or normalized.startswith("WITH")):
+            raise Exception(f"安全拦截: 只允许 SELECT 查询，不允许 {normalized.split()[0]} 操作")
+
+        dangerous_keywords = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC", "EXECUTE"]
+        for keyword in dangerous_keywords:
+            # 检查是否作为独立关键字出现（避免误匹配如 "UPDATED_AT"）
+            if f" {keyword} " in f" {normalized} " or normalized.startswith(f"{keyword} "):
+                raise Exception(f"安全拦截: 检测到危险关键字 {keyword}")
 
     def get_tables(self) -> List[Dict[str, Any]]:
         """获取所有表信息"""

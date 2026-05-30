@@ -1,66 +1,60 @@
+import json
+import logging
+from typing import Optional
+
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from typing import Optional
 
 from app.core.config import OPENAI_API_KEY, OPENAI_API_BASE, OPENAI_MODEL
 
+logger = logging.getLogger(__name__)
+
+# LLM 单例
+_llm_instance: Optional[ChatOpenAI] = None
+
 
 def get_llm() -> ChatOpenAI:
-    """获取 LLM 实例"""
-    return ChatOpenAI(
-        model=OPENAI_MODEL,
-        api_key=OPENAI_API_KEY,
-        base_url=OPENAI_API_BASE,
-        temperature=0,
-        max_tokens=2000,
-    )
+    """获取 LLM 单例"""
+    global _llm_instance
+    if _llm_instance is None:
+        logger.info("初始化 LLM 实例: model=%s", OPENAI_MODEL)
+        _llm_instance = ChatOpenAI(
+            model=OPENAI_MODEL,
+            api_key=OPENAI_API_KEY,
+            base_url=OPENAI_API_BASE,
+            temperature=0,
+            max_tokens=2000,
+        )
+    return _llm_instance
 
 
 def create_text2sql_prompt(schema: str, errors: list[str] = None) -> ChatPromptTemplate:
     """创建 Text2SQL 提示模板"""
     error_context = ""
     if errors:
-        error_context = "\n\n之前的错误:\n" + "\n".join(
+        error_context = "\n\n之前的错误（请避免重复这些错误）:\n" + "\n".join(
             [f"- {error}" for error in errors]
         )
 
-    template = f"""你是一个 SQL 专家。根据用户的自然语言查询，生成对应的 SQL 语句。
+    template = f"""你是一个 SQL 专家。根据用户的自然语言查询，生成对应的 SQLite SQL 语句。
 
 数据库 Schema:
 {schema}
 
 要求:
-1. 只返回 SQL 语句，不要有其他内容
-2. 使用标准 SQL 语法
+1. 只返回 SQL 语句，不要有任何解释、注释或 markdown 标记
+2. 使用 SQLite 语法
 3. 确保 SQL 语句正确且可执行
 4. 如果查询涉及聚合，请使用适当的 GROUP BY 子句
 5. 如果查询需要排序，请使用 ORDER BY 子句
 6. 使用 LIMIT 限制结果集大小（默认 1000 行）
+7. 列名和表名必须与 schema 完全一致
 {{error_context}}
 
 用户查询: {{query}}
 
 SQL:"""
-
-    return ChatPromptTemplate.from_template(template)
-
-
-def create_echarts_prompt(data_description: str) -> ChatPromptTemplate:
-    """创建 Echarts 配置生成提示模板"""
-    template = """你是一个数据可视化专家。根据查询结果数据，生成 Echarts 图表配置。
-
-数据描述:
-{data_description}
-
-要求:
-1. 返回完整的 Echarts 配置 JSON
-2. 选择合适的图表类型（柱状图、折线图、饼图等）
-3. 配置标题、坐标轴、图例等
-4. 确保配置可以直接在 Echarts 中使用
-5. 如果数据不适合可视化，返回空配置
-
-请返回 Echarts 配置 JSON:"""
 
     return ChatPromptTemplate.from_template(template)
 
@@ -72,82 +66,148 @@ def generate_sql(schema: str, query: str, errors: list[str] = None) -> str:
     chain = prompt | llm | StrOutputParser()
 
     result = chain.invoke({"query": query, "error_context": ""})
-    
-    # 清理 SQL 输出，移除 markdown 代码块
-    cleaned = result.strip()
+    return _clean_sql_output(result)
+
+
+def _clean_sql_output(raw: str) -> str:
+    """清理 LLM 输出的 SQL，移除 markdown 代码块等"""
+    cleaned = raw.strip()
+    # 移除 markdown 代码块
     if cleaned.startswith("```sql"):
         cleaned = cleaned[6:]
-    if cleaned.startswith("```"):
+    elif cleaned.startswith("```"):
         cleaned = cleaned[3:]
     if cleaned.endswith("```"):
         cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
-    
-    # 移除末尾的分号（如果存在）
+    # 移除末尾分号
     if cleaned.endswith(";"):
         cleaned = cleaned[:-1].strip()
-    
     return cleaned
 
 
-def generate_echarts_config(data_description: str, data: list = None) -> dict:
-    """生成 Echarts 配置"""
-    # 如果没有数据，返回默认配置
+def generate_echarts_config(sql: str, data: list[dict]) -> dict:
+    """使用 LLM 智能生成 Echarts 配置"""
     if not data:
-        return {
-            "title": {"text": "数据可视化"},
-            "tooltip": {},
-            "xAxis": {"type": "category", "data": []},
-            "yAxis": {"type": "value"},
-            "series": [{"type": "bar", "data": []}],
-        }
-    
-    # 根据数据自动生成配置
-    import json
-    
-    # 获取列名
+        return _default_echarts_config("暂无数据")
+
+    # 构建数据摘要给 LLM
     columns = list(data[0].keys())
-    
-    # 确定图表类型
-    # 如果有2列，第一列作为类别，第二列作为数值
-    if len(columns) >= 2:
-        category_column = columns[0]
-        value_column = columns[1]
-        
-        # 提取数据
-        categories = [str(row[category_column]) for row in data]
-        values = [row[value_column] for row in data]
-        
-        # 生成配置
-        config = {
-            "title": {"text": f"{value_column} 按 {category_column} 分布"},
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "shadow"}
-            },
-            "xAxis": {
-                "type": "category",
-                "data": categories,
-                "axisLabel": {"rotate": 45}
-            },
+    sample_rows = data[:5]
+
+    data_summary = f"列名: {', '.join(columns)}\n"
+    data_summary += f"总行数: {len(data)}\n"
+    data_summary += "示例数据（前5行）:\n"
+    for i, row in enumerate(sample_rows):
+        data_summary += f"  {i+1}. {json.dumps(row, ensure_ascii=False)}\n"
+
+    # 统计信息
+    numeric_cols = [c for c in columns if isinstance(data[0].get(c), (int, float))]
+    if numeric_cols:
+        data_summary += f"数值列: {', '.join(numeric_cols)}\n"
+        for col in numeric_cols[:3]:
+            values = [r[col] for r in data if r.get(col) is not None]
+            if values:
+                data_summary += f"  {col}: min={min(values):.2f}, max={max(values):.2f}, avg={sum(values)/len(values):.2f}\n"
+
+    template = """你是一个数据可视化专家。根据查询结果，生成最合适的 Echarts 图表配置。
+
+查询 SQL: {sql}
+
+数据摘要:
+{data_summary}
+
+要求:
+1. 根据数据特征智能选择图表类型：
+   - 时间序列/趋势 → 折线图 (line)
+   - 分类对比 → 柱状图 (bar)
+   - 占比/比例 → 饼图 (pie)
+   - 两个数值列的相关性 → 散点图 (scatter)
+   - 多维数据 → 雷达图 (radar)
+2. 配置标题、坐标轴、图例、tooltip
+3. 使用好看的配色方案
+4. 只返回 JSON，不要有其他内容
+
+Echarts 配置 JSON:"""
+
+    prompt = ChatPromptTemplate.from_template(template)
+    llm = get_llm()
+    chain = prompt | llm | StrOutputParser()
+
+    try:
+        result = chain.invoke({"sql": sql, "data_summary": data_summary})
+        return _parse_echarts_json(result)
+    except Exception as e:
+        logger.warning("LLM 生成 Echarts 配置失败，使用规则回退: %s", e)
+        return _fallback_echarts_config(columns, data)
+
+
+def _parse_echarts_json(raw: str) -> dict:
+    """解析 LLM 返回的 Echarts JSON，带多种修复尝试"""
+    import re
+
+    cleaned = raw.strip()
+    # 移除 markdown 代码块
+    if cleaned.startswith("```json"):
+        cleaned = cleaned[7:]
+    elif cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
+    cleaned = cleaned.strip()
+
+    # 直接尝试
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # 尝试提取第一个 JSON 对象
+    match = re.search(r'\{[\s\S]*\}', cleaned)
+    if match:
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # 尝试修复尾部逗号
+    fixed = re.sub(r',\s*([}\]])', r'\1', cleaned)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        pass
+
+    logger.warning("JSON 解析失败，原始内容前200字符: %s", raw[:200])
+    return _default_echarts_config("图表配置解析失败")
+
+
+def _fallback_echarts_config(columns: list, data: list) -> dict:
+    """规则回退：根据列类型生成基础图表"""
+    numeric_cols = [c for c in columns if isinstance(data[0].get(c), (int, float))]
+    category_cols = [c for c in columns if c not in numeric_cols]
+
+    if category_cols and numeric_cols:
+        cat_col = category_cols[0]
+        val_col = numeric_cols[0]
+        categories = [str(r.get(cat_col, "")) for r in data]
+        values = [r.get(val_col, 0) for r in data]
+        return {
+            "title": {"text": f"{val_col} 按 {cat_col} 分布", "left": "center"},
+            "tooltip": {"trigger": "axis"},
+            "xAxis": {"type": "category", "data": categories, "axisLabel": {"rotate": 45 if len(categories) > 6 else 0}},
             "yAxis": {"type": "value"},
-            "series": [{
-                "name": value_column,
-                "type": "bar",
-                "data": values,
-                "itemStyle": {
-                    "color": "#3B82F6"
-                }
-            }]
+            "series": [{"name": val_col, "type": "bar", "data": values}],
         }
-        
-        return config
-    
-    # 如果只有一列，返回默认配置
+
+    return _default_echarts_config("数据格式不适合自动生成图表")
+
+
+def _default_echarts_config(title: str = "数据可视化") -> dict:
+    """默认空图表配置"""
     return {
-        "title": {"text": "数据可视化"},
+        "title": {"text": title, "left": "center"},
         "tooltip": {},
         "xAxis": {"type": "category", "data": []},
         "yAxis": {"type": "value"},
-        "series": [{"type": "bar", "data": []}],
+        "series": [],
     }

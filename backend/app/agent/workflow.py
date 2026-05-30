@@ -1,4 +1,6 @@
+import logging
 from typing import Dict, Any, Literal
+
 from langgraph.graph import StateGraph, END
 
 from app.agent.state import AgentState
@@ -6,58 +8,67 @@ from app.agent.nodes.text2sql import text2sql_node
 from app.agent.nodes.execute_sql import execute_sql_node
 from app.agent.nodes.generate_echarts import generate_echarts_node
 
+logger = logging.getLogger(__name__)
+
 
 def should_retry(state: AgentState) -> Literal["text2sql", "generate_echarts"]:
     """决定是否需要重试"""
-    print(f"[Router] 检查重试条件: retry_count={state.get('retry_count', 0)}, max_retries={state.get('max_retries', 3)}")
+    retry_count = state.get("retry_count", 0)
+    max_retries = state.get("max_retries", 3)
+    has_errors = bool(state.get("errors"))
 
-    # 检查是否有错误且未超过最大重试次数
-    if state.get("errors") and state.get("retry_count", 0) < state.get("max_retries", 3):
-        print("[Router] 决定重试 Text2SQL")
+    logger.info("路由判断: retry_count=%d, max_retries=%d, has_errors=%s",
+                retry_count, max_retries, has_errors)
+
+    if has_errors and retry_count < max_retries:
+        logger.info("决定重试 Text2SQL")
         return "text2sql"
 
-    # 如果没有错误或超过最大重试次数，继续生成 Echarts 配置
-    print("[Router] 继续生成 Echarts 配置")
+    logger.info("继续生成 Echarts 配置")
     return "generate_echarts"
 
 
 def create_workflow() -> StateGraph:
     """创建 LangGraph 工作流"""
-    # 创建状态图
     workflow = StateGraph(AgentState)
 
-    # 添加节点
     workflow.add_node("text2sql", text2sql_node)
     workflow.add_node("execute_sql", execute_sql_node)
     workflow.add_node("generate_echarts", generate_echarts_node)
 
-    # 设置入口点
     workflow.set_entry_point("text2sql")
-
-    # 添加边
     workflow.add_edge("text2sql", "execute_sql")
 
-    # 添加条件边：根据是否需要重试
     workflow.add_conditional_edges(
         "execute_sql",
         should_retry,
         {
-            "text2sql": "text2sql",  # 重试
-            "generate_echarts": "generate_echarts",  # 继续
+            "text2sql": "text2sql",
+            "generate_echarts": "generate_echarts",
         },
     )
 
-    # 生成 Echarts 后结束
     workflow.add_edge("generate_echarts", END)
-
     return workflow
+
+
+# 工作流单例
+_workflow_app = None
+
+
+def _get_workflow_app():
+    """获取编译后的工作流单例"""
+    global _workflow_app
+    if _workflow_app is None:
+        workflow = create_workflow()
+        _workflow_app = workflow.compile()
+    return _workflow_app
 
 
 def run_workflow(query: str, schema: str, max_retries: int = 3) -> Dict[str, Any]:
     """运行工作流"""
-    print(f"[Workflow] 开始处理查询: {query}")
+    logger.info("开始处理查询: %s", query)
 
-    # 创建初始状态
     initial_state: AgentState = {
         "query": query,
         "sql": None,
@@ -71,14 +82,8 @@ def run_workflow(query: str, schema: str, max_retries: int = 3) -> Dict[str, Any
         "response": None,
     }
 
-    # 编译并运行工作流
-    workflow = create_workflow()
-    app = workflow.compile()
-
-    # 执行工作流
+    app = _get_workflow_app()
     final_state = app.invoke(initial_state)
 
-    print(f"[Workflow] 工作流完成")
-
-    # 返回最终响应
+    logger.info("工作流完成")
     return final_state.get("response", {"error": "工作流未产生响应"})
