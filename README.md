@@ -27,7 +27,7 @@ NL2BI 是一个智能数据分析系统，用户可以通过自然语言查询�
 ### 1. 智能查询处理
 - 自然语言转 SQL（Text2SQL）
 - 自动执行查询并返回结果
-- 智能生成 Echarts 可视化配置
+- LLM 智能选择图表类型（折线图、柱状图、饼图等）
 
 ### 2. 轨迹记忆机制
 - 维护错误历史列表
@@ -49,7 +49,14 @@ NL2BI 是一个智能数据分析系统，用户可以通过自然语言查询�
 ### 5. 数据问答对话
 - 基于查询结果进行智能问答
 - 支持追问数据细节和趋势分析
-- 提供预设问题建议
+
+### 6. 查询历史
+- 自动保存查询记录（最多 20 条）
+- 点击历史项快速回填查询
+
+### 7. SQL 安全防护
+- 只允许 SELECT 查询
+- 拦截 DROP、DELETE、UPDATE 等危险操作
 
 ## 项目结构
 
@@ -66,15 +73,22 @@ nl2bi/
 │   │   ├── core/              # 配置
 │   │   ├── models/            # 数据模型
 │   │   └── utils/             # 工具函数
-│   ├── pyproject.toml         # 项目配置
-│   └── .env                   # 环境变量
+│   ├── pyproject.toml
+│   └── .env.example           # 环境变量模板
 ├── frontend/                   # 前端应用
 │   ├── src/
 │   │   ├── components/        # React 组件
+│   │   │   ├── ChatPanel.tsx      # 数据问答
+│   │   │   ├── QueryHistory.tsx   # 查询历史
+│   │   │   ├── QueryInput.tsx     # 查询输入
+│   │   │   └── ResultDisplay.tsx  # 结果展示
 │   │   ├── services/          # API 服务
 │   │   └── types/             # TypeScript 类型
 │   ├── package.json
 │   └── vite.config.ts
+├── start.sh                    # 一键启动脚本
+├── test.sh                     # 测试脚本
+├── docker-compose.yml          # Docker 部署配置
 └── README.md
 ```
 
@@ -87,41 +101,95 @@ nl2bi/
 - Node.js 18+
 - uv（Python 包管理器）
 
-### 2. 后端启动
+> 如果未安装 uv，启动脚本会自动安装。
+
+### 2. 配置环境变量
 
 ```bash
-# 进入后端目录
 cd backend
-
-# 安装依赖
-uv sync
-
-# 配置环境变量
 cp .env.example .env
-# 编辑 .env 文件，设置 OPENAI_API_KEY
-
-# 启动服务
-uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### 3. 前端启动
+编辑 `.env` 文件，填入你的 API Key：
+
+```env
+OPENAI_API_KEY=your_api_key_here
+OPENAI_API_BASE=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4o-mini
+```
+
+### 3. 一键启动
 
 ```bash
-# 进入前端目录
-cd frontend
+./start.sh
+```
 
-# 安装依赖
-npm install
+启动脚本会自动：
+- 检查并安装 uv（如果缺失）
+- 安装后端 Python 依赖
+- 启动后端服务（端口 8000）
+- 安装前端 Node 依赖
+- 启动前端服务（端口 5173）
 
-# 启动开发服务器
-npm run dev
+启动成功后会显示：
+```
+=== NL2BI 系统已启动 ===
+后端服务: http://localhost:8000
+前端界面: http://localhost:5173
+API 文档: http://localhost:8000/docs
+
+日志文件:
+  后端日志: /tmp/nl2bi-backend.log
+  前端日志: /tmp/nl2bi-frontend.log
+
+停止服务:
+  kill <PID1> <PID2>
 ```
 
 ### 4. 访问应用
 
-- 前端界面: http://localhost:5173
-- API 文档: http://localhost:8000/docs
-- 健康检查: http://localhost:8000/health
+| 地址 | 说明 |
+|------|------|
+| http://localhost:5173 | 前端界面 |
+| http://localhost:8000/docs | API 文档（Swagger） |
+| http://localhost:8000/health | 健康检查 |
+
+### 5. 停止服务
+
+```bash
+# 方式一：使用启动时输出的 PID
+kill <后端PID> <前端PID>
+
+# 方式二：直接杀掉所有相关进程
+pkill -f uvicorn
+pkill -f "vite"
+```
+
+## 手动启动（开发模式）
+
+如果需要分别启动前后端以便调试：
+
+```bash
+# 终端 1：启动后端
+cd backend
+uv sync
+uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+# 终端 2：启动前端
+cd frontend
+npm install
+npm run dev
+```
+
+## Docker 部署
+
+```bash
+# 需要先配置环境变量
+cp backend/.env.example backend/.env
+# 编辑 backend/.env 填入 API Key
+
+docker-compose up -d
+```
 
 ## API 接口
 
@@ -135,6 +203,17 @@ Content-Type: application/json
 }
 ```
 
+### 数据问答
+```http
+POST /api/chat
+Content-Type: application/json
+
+{
+  "message": "这些数据的最大值是多少？",
+  "context": { "sql": "...", "data": [...] }
+}
+```
+
 ### 获取表信息
 ```http
 GET /api/tables
@@ -145,54 +224,27 @@ GET /api/tables
 GET /api/schema
 ```
 
-## 配置说明
-
-### 环境变量
+## 环境变量说明
 
 | 变量名 | 说明 | 默认值 |
 |--------|------|--------|
-| OPENAI_API_KEY | OpenAI API 密钥 | - |
+| OPENAI_API_KEY | API 密钥 | （必填） |
 | OPENAI_API_BASE | API 基础 URL | https://api.openai.com/v1 |
 | OPENAI_MODEL | 模型名称 | gpt-4o-mini |
-| APP_HOST | 服务主机 | 0.0.0.0 |
-| APP_PORT | 服务端口 | 8000 |
+| APP_PORT | 后端端口 | 8000 |
 | DEBUG | 调试模式 | True |
 | MAX_RETRIES | 最大重试次数 | 3 |
 
-## 开发说明
+## 常见问题
 
-### 添加新的查询类型
+**Q: 启动报错 "OPENAI_API_KEY is not set"**
+A: 检查 `backend/.env` 文件是否已创建并填入了有效的 API Key。
 
-1. 在 `backend/app/agent/tools.py` 中修改提示模板
-2. 在 `backend/app/agent/nodes/` 中添加新的节点
-3. 在 `backend/app/agent/workflow.py` 中更新工作流
+**Q: 前端页面显示 "Failed to fetch"**
+A: 确保后端服务已启动（http://localhost:8000/health 能访问）。
 
-### 自定义图表类型
-
-1. 在 `backend/app/agent/tools.py` 中修改 `generate_echarts_config` 函数
-2. 支持更多 Echarts 图表类型
-
-## 故障排除
-
-### 常见问题
-
-1. **API 密钥错误**
-   - 检查 `.env` 文件中的 `OPENAI_API_KEY` 是否正确
-
-2. **数据库连接失败**
-   - 确保 SQLite 数据库文件存在且有读写权限
-
-3. **前端无法访问后端**
-   - 检查 CORS 配置
-   - 确保后端服务已启动
-
-## 贡献指南
-
-1. Fork 项目
-2. 创建功能分支 (`git checkout -b feature/xxx`)
-3. 提交更改 (`git commit -m 'Add feature xxx'`)
-4. 推送到分支 (`git push origin feature/xxx`)
-5. 创建 Pull Request
+**Q: 查询返回错误但没有重试**
+A: 检查日志文件 `/tmp/nl2bi-backend.log`，可能是 SQL 语法错误导致超过最大重试次数。
 
 ## 许可证
 
