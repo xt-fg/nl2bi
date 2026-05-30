@@ -3,6 +3,7 @@ import logging
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
 from typing import List, Dict, Any, Optional
 
 from app.core.config import DATABASE_URL
@@ -18,7 +19,16 @@ class DatabaseManager:
 
     def initialize(self):
         """初始化数据库连接"""
-        self.engine = create_engine(DATABASE_URL, echo=False)
+        if DATABASE_URL == "sqlite:///:memory:":
+            # 内存数据库需要 StaticPool 保证多线程共享同一份数据
+            self.engine = create_engine(
+                DATABASE_URL,
+                echo=False,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
+        else:
+            self.engine = create_engine(DATABASE_URL, echo=False)
         self._create_tables()
         self._insert_sample_data()
         logger.info("数据库初始化完成")

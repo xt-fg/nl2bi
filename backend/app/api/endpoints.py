@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 
@@ -28,11 +29,9 @@ async def query_endpoint(request: QueryRequest):
     start_time = time.time()
 
     try:
-        schema = db_manager.get_schema()
-        result = run_workflow(
-            query=request.query,
-            schema=schema,
-            max_retries=MAX_RETRIES,
+        schema = await asyncio.to_thread(db_manager.get_schema)
+        result = await asyncio.to_thread(
+            lambda: run_workflow(query=request.query, schema=schema, max_retries=MAX_RETRIES)
         )
 
         execution_time = time.time() - start_time
@@ -92,11 +91,10 @@ async def chat_endpoint(request: ChatRequest):
         prompt = ChatPromptTemplate.from_template(template)
         chain = prompt | get_llm() | StrOutputParser()
 
-        response = chain.invoke({
-            "sql": sql,
-            "data_summary": data_summary,
-            "message": request.message,
-        })
+        response = await asyncio.to_thread(
+            chain.invoke,
+            {"sql": sql, "data_summary": data_summary, "message": request.message},
+        )
 
         logger.info("聊天回答生成完成")
         return ChatResponse(response=response.strip())
@@ -115,7 +113,7 @@ async def execute_sql_endpoint(request: SqlExecuteRequest):
 
     try:
         import pandas as pd
-        df = db_manager.execute_query(request.sql)
+        df = await asyncio.to_thread(db_manager.execute_query, request.sql)
 
         if df.empty:
             return SqlExecuteResponse(

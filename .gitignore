@@ -39,4 +39,5 @@ htmlcov/
 
 # Database
 *.db
-*.sqliteTODO.md
+*.sqlite
+TODO.md

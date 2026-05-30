@@ -29,18 +29,35 @@ def get_llm() -> ChatOpenAI:
     return _llm_instance
 
 
-def create_text2sql_prompt(schema: str, errors: list[str] = None) -> ChatPromptTemplate:
-    """创建 Text2SQL 提示模板"""
+def create_text2sql_prompt(schema: str, errors: list[str] = None, column_samples: str = "") -> ChatPromptTemplate:
+    """创建 Text2SQL 提示模板，包含 few-shot 示例和列值采样"""
     error_context = ""
     if errors:
         error_context = "\n\n之前的错误（请避免重复这些错误）:\n" + "\n".join(
             [f"- {error}" for error in errors]
         )
 
+    samples_section = ""
+    if column_samples:
+        samples_section = f"\n\n列值参考（用于理解枚举值和数据格式）:\n{column_samples}"
+
     template = f"""你是一个 SQL 专家。根据用户的自然语言查询，生成对应的 SQLite SQL 语句。
 
 数据库 Schema:
-{schema}
+{schema}{samples_section}
+
+示例:
+用户查询: 查询每个地区的销售总额
+SQL: SELECT region, SUM(amount) AS total_sales FROM sales GROUP BY region ORDER BY total_sales DESC LIMIT 1000
+
+用户查询: 显示销售额前5的产品名称和金额
+SQL: SELECT s.product, SUM(s.amount) AS total_amount FROM sales s GROUP BY s.product ORDER BY total_amount DESC LIMIT 5
+
+用户查询: 统计每个城市有多少客户
+SQL: SELECT city, COUNT(*) AS customer_count FROM customers GROUP BY city ORDER BY customer_count DESC LIMIT 1000
+
+用户查询: 查询2025年的销售记录
+SQL: SELECT * FROM sales WHERE sale_date >= '2025-01-01' AND sale_date < '2026-01-01' LIMIT 1000
 
 要求:
 1. 只返回 SQL 语句，不要有任何解释、注释或 markdown 标记
@@ -50,6 +67,8 @@ def create_text2sql_prompt(schema: str, errors: list[str] = None) -> ChatPromptT
 5. 如果查询需要排序，请使用 ORDER BY 子句
 6. 使用 LIMIT 限制结果集大小（默认 1000 行）
 7. 列名和表名必须与 schema 完全一致
+8. 对于日期过滤，使用 sale_date >= 'YYYY-MM-DD' 格式
+9. 产品名称在 sales 表的 product 列，类别在 category 列
 {{error_context}}
 
 用户查询: {{query}}
@@ -59,10 +78,48 @@ SQL:"""
     return ChatPromptTemplate.from_template(template)
 
 
+def get_column_samples() -> str:
+    """获取关键列的采样值，帮助 LLM 理解数据"""
+    from sqlalchemy import text
+    from app.utils.database import db_manager
+    try:
+        samples = []
+        with db_manager.engine.connect() as conn:
+            # 采样 region 列
+            result = conn.execute(text("SELECT DISTINCT region FROM sales LIMIT 10"))
+            regions = [r[0] for r in result.fetchall()]
+            if regions:
+                samples.append(f"sales.region 的值: {', '.join(regions)}")
+
+            # 采样 category 列
+            result = conn.execute(text("SELECT DISTINCT category FROM sales LIMIT 10"))
+            categories = [r[0] for r in result.fetchall()]
+            if categories:
+                samples.append(f"sales.category 的值: {', '.join(categories)}")
+
+            # 采样 product 列
+            result = conn.execute(text("SELECT DISTINCT product FROM sales LIMIT 10"))
+            products = [r[0] for r in result.fetchall()]
+            if products:
+                samples.append(f"sales.product 的值: {', '.join(products)}")
+
+            # 采样 city 列
+            result = conn.execute(text("SELECT DISTINCT city FROM customers LIMIT 10"))
+            cities = [r[0] for r in result.fetchall()]
+            if cities:
+                samples.append(f"customers.city 的值: {', '.join(cities)}")
+
+        return "\n".join(samples)
+    except Exception as e:
+        logger.warning("获取列采样失败: %s", e)
+        return ""
+
+
 def generate_sql(schema: str, query: str, errors: list[str] = None) -> str:
     """生成 SQL 语句"""
     llm = get_llm()
-    prompt = create_text2sql_prompt(schema, errors)
+    column_samples = get_column_samples()
+    prompt = create_text2sql_prompt(schema, errors, column_samples)
     chain = prompt | llm | StrOutputParser()
 
     result = chain.invoke({"query": query, "error_context": ""})
