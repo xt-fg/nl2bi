@@ -6,7 +6,7 @@ from typing import Any, Optional
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
-from app.core.config import APP_DATABASE_URL, DATABASE_URL
+from app.core.config import APP_DATABASE_URL, DATABASE_URL, DEFAULT_DATABASE_URL
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,14 @@ logger = logging.getLogger(__name__)
 DEFAULT_SEMANTIC_FIELDS = [
     ("sales", "amount", "销售额", "metric", "订单成交金额，默认用于销售规模分析", True),
     ("sales", "quantity", "销售数量", "metric", "订单中的商品数量", True),
-    ("sales", "sale_date", "销售日期", "dimension", "销售发生日期，可用于趋势和周期分析", True),
+    (
+        "sales",
+        "sale_date",
+        "销售日期",
+        "dimension",
+        "销售发生日期，可用于趋势和周期分析",
+        True,
+    ),
     ("sales", "region", "销售区域", "dimension", "华北、华东等区域维度", True),
     ("sales", "product", "产品", "dimension", "商品名称", True),
     ("sales", "category", "产品类别", "dimension", "商品所属类别", True),
@@ -55,12 +62,18 @@ class MetadataManager:
             """))
             columns = {
                 row[1]
-                for row in conn.execute(text("PRAGMA table_info(data_sources)")).fetchall()
+                for row in conn.execute(
+                    text("PRAGMA table_info(data_sources)")
+                ).fetchall()
             }
             if "connection_url" not in columns:
-                conn.execute(text("ALTER TABLE data_sources ADD COLUMN connection_url TEXT"))
                 conn.execute(
-                    text("UPDATE data_sources SET connection_url = :database_url WHERE connection_url IS NULL"),
+                    text("ALTER TABLE data_sources ADD COLUMN connection_url TEXT")
+                )
+                conn.execute(
+                    text(
+                        "UPDATE data_sources SET connection_url = :database_url WHERE connection_url IS NULL"
+                    ),
                     {"database_url": DATABASE_URL},
                 )
             conn.execute(text("""
@@ -111,7 +124,9 @@ class MetadataManager:
 
         now = datetime.utcnow().isoformat()
         with self.engine.begin() as conn:
-            source_count = conn.execute(text("SELECT COUNT(*) FROM data_sources")).scalar()
+            source_count = conn.execute(
+                text("SELECT COUNT(*) FROM data_sources")
+            ).scalar()
             if source_count == 0:
                 conn.execute(
                     text("""
@@ -130,8 +145,33 @@ class MetadataManager:
                         "updated_at": now,
                     },
                 )
-
-            for table_name, column_name, display_name, field_type, description, is_queryable in DEFAULT_SEMANTIC_FIELDS:
+            else:
+                conn.execute(
+                    text("""
+                        UPDATE data_sources
+                        SET kind = :kind,
+                            connection_url = :connection_url,
+                            connection_label = :connection_label,
+                            updated_at = :updated_at
+                        WHERE name = '默认销售数据源'
+                    """),
+                    {
+                        "kind": (
+                            "sqlite" if DATABASE_URL.startswith("sqlite:") else "sql"
+                        ),
+                        "connection_url": DATABASE_URL,
+                        "connection_label": self._mask_connection(DATABASE_URL),
+                        "updated_at": now,
+                    },
+                )
+            for (
+                table_name,
+                column_name,
+                display_name,
+                field_type,
+                description,
+                is_queryable,
+            ) in DEFAULT_SEMANTIC_FIELDS:
                 conn.execute(
                     text("""
                         INSERT OR IGNORE INTO semantic_fields
@@ -152,8 +192,10 @@ class MetadataManager:
 
     @staticmethod
     def _mask_connection(url: str) -> str:
+        if url == DEFAULT_DATABASE_URL or url.endswith("/data/nl2bi_analytics.db"):
+            return "SQLite 示例数据集"
         if url == "sqlite:///:memory:":
-            return "SQLite 内存数据集"
+            return "SQLite 临时数据集"
         if "@" in url:
             prefix, suffix = url.rsplit("@", 1)
             scheme = prefix.split("://", 1)[0]
@@ -186,14 +228,21 @@ class MetadataManager:
             """)).mappings().first()
         return dict(row) if row else None
 
-    def save_data_source(self, name: str, kind: str, connection_url: str, activate: bool = True) -> dict[str, Any]:
+    def save_data_source(
+        self, name: str, kind: str, connection_url: str, activate: bool = True
+    ) -> dict[str, Any]:
         if not self.engine:
             raise RuntimeError("元数据引擎未初始化")
 
         now = datetime.utcnow().isoformat()
         with self.engine.begin() as conn:
             if activate:
-                conn.execute(text("UPDATE data_sources SET status = 'inactive', updated_at = :updated_at"), {"updated_at": now})
+                conn.execute(
+                    text(
+                        "UPDATE data_sources SET status = 'inactive', updated_at = :updated_at"
+                    ),
+                    {"updated_at": now},
+                )
             result = conn.execute(
                 text("""
                     INSERT INTO data_sources
@@ -213,7 +262,9 @@ class MetadataManager:
             )
             source_id = int(result.lastrowid)
 
-        sources = [source for source in self.list_data_sources() if source["id"] == source_id]
+        sources = [
+            source for source in self.list_data_sources() if source["id"] == source_id
+        ]
         if not sources:
             raise KeyError(f"数据源不存在: {source_id}")
         return sources[0]
@@ -278,15 +329,19 @@ class MetadataManager:
             raise RuntimeError("元数据引擎未初始化")
 
         with self.engine.connect() as conn:
-            row = conn.execute(
-                text("""
+            row = (
+                conn.execute(
+                    text("""
                     SELECT id, table_name, column_name, display_name, field_type,
                            description, is_queryable, updated_at
                     FROM semantic_fields
                     WHERE table_name = :table_name AND column_name = :column_name
                 """),
-                {"table_name": table_name, "column_name": column_name},
-            ).mappings().first()
+                    {"table_name": table_name, "column_name": column_name},
+                )
+                .mappings()
+                .first()
+            )
         if not row:
             raise KeyError(f"语义字段不存在: {table_name}.{column_name}")
         field = dict(row)
@@ -350,16 +405,20 @@ class MetadataManager:
             raise RuntimeError("元数据引擎未初始化")
 
         with self.engine.connect() as conn:
-            rows = conn.execute(
-                text("""
+            rows = (
+                conn.execute(
+                    text("""
                     SELECT id, query, sql, status, row_count, execution_time,
                            retry_count, error, insight_summary, created_at
                     FROM query_records
                     ORDER BY id DESC
                     LIMIT :limit
                 """),
-                {"limit": limit},
-            ).mappings().all()
+                    {"limit": limit},
+                )
+                .mappings()
+                .all()
+            )
         return [dict(row) for row in rows]
 
     def save_report(
@@ -392,7 +451,11 @@ class MetadataManager:
                     "query": query,
                     "sql": sql,
                     "data_json": json.dumps(data, ensure_ascii=False),
-                    "echarts_config_json": json.dumps(echarts_config, ensure_ascii=False) if echarts_config else None,
+                    "echarts_config_json": (
+                        json.dumps(echarts_config, ensure_ascii=False)
+                        if echarts_config
+                        else None
+                    ),
                     "insight_summary": insight_summary,
                     "created_at": now,
                     "updated_at": now,
@@ -418,15 +481,19 @@ class MetadataManager:
             raise RuntimeError("元数据引擎未初始化")
 
         with self.engine.connect() as conn:
-            row = conn.execute(
-                text("""
+            row = (
+                conn.execute(
+                    text("""
                     SELECT id, name, description, query, sql, data_json,
                            echarts_config_json, insight_summary, created_at, updated_at
                     FROM saved_reports
                     WHERE id = :report_id
                 """),
-                {"report_id": report_id},
-            ).mappings().first()
+                    {"report_id": report_id},
+                )
+                .mappings()
+                .first()
+            )
 
         if not row:
             raise KeyError(f"报表不存在: {report_id}")

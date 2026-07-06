@@ -8,9 +8,11 @@ load_dotenv(override=True)
 
 # 项目根目录
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = BASE_DIR / "data"
 
 # 数据库配置
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///:memory:")
+DEFAULT_DATABASE_URL = f"sqlite:///{DATA_DIR / 'nl2bi_analytics.db'}"
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL)
 APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "sqlite:///./nl2bi_app.db")
 
 # OpenAI 配置
@@ -30,5 +32,5 @@ AUTH_USERS = os.getenv(
 # 重试配置
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
-# 模拟数据配置
+# 示例数据配置
 SAMPLE_DATA_ROWS = int(os.getenv("SAMPLE_DATA_ROWS", "1000"))

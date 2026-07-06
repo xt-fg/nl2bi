@@ -11,10 +11,12 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_API_BASE=${OPENAI_API_BASE:-https://api.openai.com/v1}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - DATABASE_URL=sqlite:///:memory:
+      - DATABASE_URL=sqlite:///./data/nl2bi_analytics.db
+      - APP_DATABASE_URL=sqlite:///./nl2bi_app.db
       - MAX_RETRIES=3
     volumes:
       - ./backend:/app
+      - backend_data:/app/data
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
   frontend:

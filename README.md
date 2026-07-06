@@ -133,7 +133,7 @@ LLM 根据数据特征自动选择最合适的图表类型：
 | FastAPI | Web 框架 |
 | LangGraph | Agent 工作流引擎 |
 | langchain-openai | LLM 调用 |
-| SQLite | 内存数据库 |
+| SQLite / SQLAlchemy | 内置样例数据源与外部业务库连接 |
 | Pandas | 数据处理 |
 | uv | 包管理器 |
 
@@ -177,6 +177,7 @@ cp backend/.env.example backend/.env
 OPENAI_API_KEY=your-api-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
+DATABASE_URL=sqlite:///./data/nl2bi_analytics.db
 APP_DATABASE_URL=sqlite:///./nl2bi_app.db
 AUTH_USERS=admin:admin123:admin;analyst:analyst123:analyst
 ```
@@ -234,7 +235,7 @@ postgresql://user:password@host:5432/dbname
 mysql+pymysql://user:password@host:3306/dbname
 ```
 
-点击「测试连接」验证可用性，点击「保存激活」后，后续自然语言查询会使用该数据源。默认 `sqlite:///:memory:` 会自动创建销售、客户和产品三张示例表；外部数据源只读取 schema，不会自动建表或写入样例数据。
+点击「测试连接」验证可用性，点击「保存激活」后，后续自然语言查询会使用该数据源。默认 `sqlite:///./data/nl2bi_analytics.db` 会创建一个可持久化的本地样例数据集，包含销售、客户和产品三张表；外部数据源只读取 schema，不会自动建表或写入样例数据。
 
 ### 6. 停止服务
 
@@ -497,7 +498,7 @@ Authorization: Bearer <token>
 | `OPENAI_API_KEY` | API 密钥 | （必填） |
 | `OPENAI_API_BASE` | API 基础 URL | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | 模型名称 | `gpt-4o-mini` |
-| `DATABASE_URL` | 默认分析数据源 URL | `sqlite:///:memory:` |
+| `DATABASE_URL` | 默认分析数据源 URL | `sqlite:///./data/nl2bi_analytics.db` |
 | `APP_DATABASE_URL` | 应用元数据库 URL，用于保存数据源、语义层、审计和报表 | `sqlite:///./nl2bi_app.db` |
 | `AUTH_USERS` | 登录用户配置，格式 `用户名:密码:角色;...` | `admin:admin123:admin;analyst:analyst123:analyst` |
 | `APP_PORT` | 后端端口 | `8000` |
@@ -539,7 +540,7 @@ A: 默认管理员账号是 `admin / admin123`，分析员账号是 `analyst / a
 
 **Q: 登录后接口仍返回 401**
 
-A: 前端会把 token 存在浏览器 localStorage。退出后重新登录；如果后端重启，内存 token 会失效，也需要重新登录。
+A: 前端会把 token 存在浏览器 localStorage。退出后重新登录；开发态后端重启后登录会话会失效，也需要重新登录。
 
 **Q: 如何接入真实数据库？**
 

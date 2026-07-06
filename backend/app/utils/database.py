@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 import pandas as pd
 from sqlalchemy import create_engine, text
@@ -6,7 +7,12 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from typing import List, Dict, Any, Optional
 
-from app.core.config import DATABASE_URL
+from app.core.config import (
+    DATA_DIR,
+    DATABASE_URL,
+    DEFAULT_DATABASE_URL,
+    SAMPLE_DATA_ROWS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,18 +27,22 @@ class DatabaseManager:
     def initialize(self, database_url: Optional[str] = None):
         """初始化数据库连接"""
         self.database_url = database_url or DATABASE_URL
+
+        kwargs: Dict[str, Any] = {}
+        if self._is_sqlite_url(self.database_url):
+            kwargs["connect_args"] = {"check_same_thread": False}
         if self.database_url == "sqlite:///:memory:":
-            # 内存数据库需要 StaticPool 保证多线程共享同一份数据
-            self.engine = create_engine(
-                self.database_url,
-                echo=False,
-                connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
-            )
+            # 临时 SQLite 连接需要 StaticPool 保证多线程共享同一份数据
+            kwargs["poolclass"] = StaticPool
+        sqlite_path = self._sqlite_database_path(self.database_url)
+        if sqlite_path:
+            sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+
+        self.engine = create_engine(self.database_url, echo=False, **kwargs)
+        if self._is_builtin_sample_source(self.database_url):
             self._create_tables()
             self._insert_sample_data()
         else:
-            self.engine = create_engine(self.database_url, echo=False)
             self.test_connection(self.database_url)
         logger.info("数据库初始化完成")
 
@@ -45,17 +55,41 @@ class DatabaseManager:
     def test_connection(database_url: str) -> None:
         """测试数据库连接"""
         kwargs: Dict[str, Any] = {}
+        if DatabaseManager._is_sqlite_url(database_url):
+            kwargs["connect_args"] = {"check_same_thread": False}
         if database_url == "sqlite:///:memory:":
-            kwargs = {
-                "connect_args": {"check_same_thread": False},
-                "poolclass": StaticPool,
-            }
+            kwargs["poolclass"] = StaticPool
         engine = create_engine(database_url, echo=False, **kwargs)
         try:
             with engine.connect() as conn:
                 conn.execute(text("SELECT 1"))
         finally:
             engine.dispose()
+
+    @staticmethod
+    def _is_sqlite_url(database_url: str) -> bool:
+        return database_url.startswith("sqlite:")
+
+    @staticmethod
+    def _is_builtin_sample_source(database_url: str) -> bool:
+        sqlite_path = DatabaseManager._sqlite_database_path(database_url)
+        return (
+            database_url in {DEFAULT_DATABASE_URL, "sqlite:///:memory:"}
+            or sqlite_path == DATA_DIR / "nl2bi_analytics.db"
+        )
+
+    @staticmethod
+    def _sqlite_database_path(database_url: str) -> Optional[Path]:
+        if (
+            not database_url.startswith("sqlite:///")
+            or database_url == "sqlite:///:memory:"
+        ):
+            return None
+        raw_path = database_url.removeprefix("sqlite:///")
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = Path.cwd() / path
+        return path.resolve()
 
     def _create_tables(self):
         """创建表结构"""
@@ -64,9 +98,7 @@ class DatabaseManager:
 
         with self.engine.connect() as conn:
             # 销售表
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS sales (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     product TEXT NOT NULL,
@@ -77,14 +109,10 @@ class DatabaseManager:
                     region TEXT NOT NULL,
                     customer_id INTEGER
                 )
-            """
-                )
-            )
+            """))
 
             # 客户表
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS customers (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -93,14 +121,10 @@ class DatabaseManager:
                     city TEXT,
                     country TEXT
                 )
-            """
-                )
-            )
+            """))
 
             # 产品表
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS products (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
@@ -108,14 +132,12 @@ class DatabaseManager:
                     price REAL NOT NULL,
                     stock_quantity INTEGER NOT NULL
                 )
-            """
-                )
-            )
+            """))
 
             conn.commit()
 
     def _insert_sample_data(self):
-        """插入模拟数据"""
+        """插入内置示例数据"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
 
@@ -126,11 +148,12 @@ class DatabaseManager:
             if count > 0:
                 return
 
-        # 生成模拟数据
+        # 生成示例数据
         import numpy as np
         from datetime import datetime, timedelta
 
         np.random.seed(42)
+        row_count = SAMPLE_DATA_ROWS
 
         # 产品数据
         products_data = {
@@ -191,26 +214,24 @@ class DatabaseManager:
 
         # 销售数据
         sales_data = {
-            "product": np.random.choice(products_data["name"], 1000).tolist(),
+            "product": np.random.choice(products_data["name"], row_count).tolist(),
             "category": [],
             "amount": [],
-            "quantity": np.random.randint(1, 10, 1000).tolist(),
+            "quantity": np.random.randint(1, 10, row_count).tolist(),
             "sale_date": [
                 (datetime.now() - timedelta(days=np.random.randint(1, 365))).strftime(
                     "%Y-%m-%d"
                 )
-                for _ in range(1000)
+                for _ in range(row_count)
             ],
             "region": np.random.choice(
-                ["华北", "华东", "华南", "西南", "西北", "东北"], 1000
+                ["华北", "华东", "华南", "西南", "西北", "东北"], row_count
             ).tolist(),
-            "customer_id": np.random.randint(1, 51, 1000).tolist(),
+            "customer_id": np.random.randint(1, 51, row_count).tolist(),
         }
 
         # 根据产品设置类别和金额
-        product_price_map = dict(
-            zip(products_data["name"], products_data["price"])
-        )
+        product_price_map = dict(zip(products_data["name"], products_data["price"]))
         product_category_map = dict(
             zip(products_data["name"], products_data["category"])
         )
@@ -227,12 +248,10 @@ class DatabaseManager:
             # 插入产品数据
             for i in range(len(products_data["name"])):
                 conn.execute(
-                    text(
-                        """
+                    text("""
                     INSERT INTO products (name, category, price, stock_quantity)
                     VALUES (:name, :category, :price, :stock_quantity)
-                """
-                    ),
+                """),
                     {
                         "name": products_data["name"][i],
                         "category": products_data["category"][i],
@@ -244,12 +263,10 @@ class DatabaseManager:
             # 插入客户数据
             for i in range(len(customers_data["name"])):
                 conn.execute(
-                    text(
-                        """
+                    text("""
                     INSERT INTO customers (name, email, registration_date, city, country)
                     VALUES (:name, :email, :registration_date, :city, :country)
-                """
-                    ),
+                """),
                     {
                         "name": customers_data["name"][i],
                         "email": customers_data["email"][i],
@@ -262,12 +279,10 @@ class DatabaseManager:
             # 插入销售数据
             for i in range(len(sales_data["product"])):
                 conn.execute(
-                    text(
-                        """
+                    text("""
                     INSERT INTO sales (product, category, amount, quantity, sale_date, region, customer_id)
                     VALUES (:product, :category, :amount, :quantity, :sale_date, :region, :customer_id)
-                """
-                    ),
+                """),
                     {
                         "product": sales_data["product"][i],
                         "category": sales_data["category"][i],
@@ -306,12 +321,25 @@ class DatabaseManager:
         normalized = sql.strip().upper()
         # 只允许 SELECT 和 WITH (CTE)
         if not (normalized.startswith("SELECT") or normalized.startswith("WITH")):
-            raise Exception(f"安全拦截: 只允许 SELECT 查询，不允许 {normalized.split()[0]} 操作")
+            raise Exception(
+                f"安全拦截: 只允许 SELECT 查询，不允许 {normalized.split()[0]} 操作"
+            )
 
-        dangerous_keywords = ["DROP", "DELETE", "UPDATE", "INSERT", "ALTER", "TRUNCATE", "EXEC", "EXECUTE"]
+        dangerous_keywords = [
+            "DROP",
+            "DELETE",
+            "UPDATE",
+            "INSERT",
+            "ALTER",
+            "TRUNCATE",
+            "EXEC",
+            "EXECUTE",
+        ]
         for keyword in dangerous_keywords:
             # 检查是否作为独立关键字出现（避免误匹配如 "UPDATED_AT"）
-            if f" {keyword} " in f" {normalized} " or normalized.startswith(f"{keyword} "):
+            if f" {keyword} " in f" {normalized} " or normalized.startswith(
+                f"{keyword} "
+            ):
                 raise Exception(f"安全拦截: 检测到危险关键字 {keyword}")
 
     def get_tables(self) -> List[Dict[str, Any]]:
@@ -322,17 +350,16 @@ class DatabaseManager:
         tables = []
         with self.engine.connect() as conn:
             # 获取表名
-            inspector_query = text(
-                """
+            inspector_query = text("""
                 SELECT name FROM sqlite_master
                 WHERE type='table' AND name NOT LIKE 'sqlite_%'
-                """
-            )
+                """)
             try:
                 result = conn.execute(inspector_query)
                 table_names = [row[0] for row in result.fetchall()]
             except Exception:
                 from sqlalchemy import inspect
+
                 table_names = inspect(self.engine).get_table_names()
 
             for table_name in table_names:
@@ -342,7 +369,11 @@ class DatabaseManager:
                     columns = [row[1] for row in result.fetchall()]
                 except Exception:
                     from sqlalchemy import inspect
-                    columns = [column["name"] for column in inspect(self.engine).get_columns(table_name)]
+
+                    columns = [
+                        column["name"]
+                        for column in inspect(self.engine).get_columns(table_name)
+                    ]
                 tables.append({"name": table_name, "columns": columns})
 
         return tables
