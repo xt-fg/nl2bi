@@ -26,6 +26,13 @@ def generate_echarts_node(state: AgentState) -> Dict[str, Any]:
                 "data": [],
                 "echarts_config": None,
                 "error": error_msg,
+                "error_detail": "请先完成一次有结果的数据查询，再生成图表。",
+                "suggestions": [
+                    "换一种说法重新提问，明确要统计的指标和维度",
+                    "减少时间、地区、产品或类别等筛选条件后再试",
+                    "使用数据中存在的取值，例如 华北、华东、手机、电脑",
+                ],
+                "retry_count": state.get("retry_count", 0),
             },
         }
 
@@ -42,6 +49,7 @@ def generate_echarts_node(state: AgentState) -> Dict[str, Any]:
                 "data": data,
                 "echarts_config": echarts_config,
                 "error": None,
+                "retry_count": state.get("retry_count", 0),
             },
         }
 
@@ -58,5 +66,6 @@ def generate_echarts_node(state: AgentState) -> Dict[str, Any]:
                 "data": data,
                 "echarts_config": None,
                 "error": error_msg,
+                "retry_count": state.get("retry_count", 0),
             },
         }

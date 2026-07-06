@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109+-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-Agent_Framework-blue?style=flat)](https://langchain-ai.github.io/langgraph/)
-[![React](https://img.shields.io/badge/React-18+-61DAFB?style=flat&logo=react&logoColor=black)](https://react.dev/)
+[![React](https://img.shields.io/badge/React-19+-61DAFB?style=flat&logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3+-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Echarts](https://img.shields.io/badge/Echarts-Visualization-AA3366?style=flat)](https://echarts.apache.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -22,6 +22,12 @@ NL2BI 是一个**智能数据分析系统**，用户只需用自然语言描述�
 
 ### ✨ 核心特性
 
+- 🔐 **登录与角色权限** - 内置 admin / analyst 角色，管理员可管理数据源和语义层
+- 🔌 **数据源管理** - 支持测试并激活 SQLAlchemy 数据库连接，默认提供 SQLite 示例数据集
+- 🧾 **语义层配置** - 为字段维护中文名、指标/维度类型和业务口径，提升 Text2SQL 稳定性
+- 🗂️ **查询审计持久化** - 保存查询、SQL、耗时、行数、错误、重试次数和洞察摘要
+- 📌 **报表保存** - 将查询结果、图表配置和洞察摘要保存为可复用报表
+- 🧩 **业务洞察摘要** - 自动生成结果摘要，突出行数、最大值、最小值、均值和表现最高维度
 - 🤖 **Multi-Agent 工作流** - LangGraph 状态机驱动的 Text2SQL → SQL 执行 → 图表生成闭环
 - 🧠 **轨迹记忆机制** - 错误历史汇编入 Prompt，让模型反思修正，避免死循环
 - 🛡️ **空值拦截** - 检测空结果集，视作业务逻辑幻觉，强制重试（最多 3 次）
@@ -40,18 +46,23 @@ NL2BI 是一个**智能数据分析系统**，用户只需用自然语言描述�
 ```mermaid
 graph TB
     subgraph "前端 (React + TypeScript)"
+        LOGIN[登录/角色] --> UI
         UI[查询输入] --> |自然语言| API
         API --> |SQL + 数据 + 图表| RESULT[结果展示]
         RESULT --> CHART[Echarts 图表]
         RESULT --> CHAT[数据问答]
+        RESULT --> REPORT[保存报表]
     end
     
     subgraph "后端 (FastAPI + LangGraph)"
         API[API Layer] --> WF[LangGraph 工作流]
+        API --> AUTH[Token 权限校验]
+        API --> META[元数据服务<br/>数据源/语义层/审计/报表]
         
         WF --> T2S[Text2SQL 节点<br/>LLM 生成 SQL]
         T2S --> EXEC[SQL 执行沙盒]
         EXEC --> |成功| ECHART[Echarts 配置生成<br/>LLM 智能选图]
+        EXEC --> INSIGHT[规则洞察摘要]
         EXEC --> |失败/空结果| ROUTE{重试?}
         ROUTE --> |未超限| T2S
         ROUTE --> |超限| ERR[返回错误]
@@ -61,8 +72,10 @@ graph TB
     end
     
     subgraph "数据层"
-        DB[(SQLite 内存数据库<br/>模拟销售数据)]
+        DB[(业务数据库<br/>SQLite / SQLAlchemy)]
+        APPDB[(应用元数据库<br/>查询审计/报表/语义层)]
         DB --> EXEC
+        APPDB --> META
     end
     
     style T2S fill:#e3f2fd,stroke:#1565c0,stroke-width:2px
@@ -128,7 +141,7 @@ LLM 根据数据特征自动选择最合适的图表类型：
 
 | 技术 | 用途 |
 |------|------|
-| React 18 | UI 框架 |
+| React 19 | UI 框架 |
 | TypeScript | 类型安全 |
 | Vite | 构建工具 |
 | TailwindCSS | 样式框架 |
@@ -164,6 +177,8 @@ cp backend/.env.example backend/.env
 OPENAI_API_KEY=your-api-key-here
 OPENAI_API_BASE=https://api.openai.com/v1
 OPENAI_MODEL=gpt-4o-mini
+APP_DATABASE_URL=sqlite:///./nl2bi_app.db
+AUTH_USERS=admin:admin123:admin;analyst:analyst123:analyst
 ```
 
 ### 3. 一键启动
@@ -200,7 +215,28 @@ API 文档: http://localhost:8000/docs
 | http://localhost:8000/docs | API 文档（Swagger） |
 | http://localhost:8000/health | 健康检查 |
 
-### 5. 停止服务
+默认登录账号：
+
+| 用户名 | 密码 | 角色 | 权限 |
+|--------|------|------|------|
+| `admin` | `admin123` | 管理员 | 查询、报表、数据源配置、语义层配置 |
+| `analyst` | `analyst123` | 分析员 | 查询、追问、保存报表、查看数据源和语义层 |
+
+生产环境请通过 `AUTH_USERS` 修改默认账号密码。
+
+### 5. 配置真实数据源
+
+登录后，管理员可在左侧「业务工作区」的「连接配置」中输入 SQLAlchemy URL，例如：
+
+```text
+sqlite:///./data.db
+postgresql://user:password@host:5432/dbname
+mysql+pymysql://user:password@host:3306/dbname
+```
+
+点击「测试连接」验证可用性，点击「保存激活」后，后续自然语言查询会使用该数据源。默认 `sqlite:///:memory:` 会自动创建销售、客户和产品三张示例表；外部数据源只读取 schema，不会自动建表或写入样例数据。
+
+### 6. 停止服务
 
 ```bash
 # 方式一：使用启动时输出的 PID
@@ -230,11 +266,14 @@ nl2bi/
 │   │   ├── api/
 │   │   │   └── endpoints.py       # API 路由
 │   │   ├── core/
+│   │   │   ├── auth.py            # Token 登录与角色校验
 │   │   │   └── config.py          # 配置
 │   │   ├── models/
 │   │   │   └── schemas.py         # Pydantic 数据模型
 │   │   ├── utils/
-│   │   │   └── database.py        # SQLite 管理 & 安全检查
+│   │   │   ├── database.py        # 分析数据源管理 & SQL 安全检查
+│   │   │   ├── insights.py        # 规则洞察摘要
+│   │   │   └── metadata.py        # 数据源/语义层/审计/报表持久化
 │   │   └── main.py                # FastAPI 入口
 │   ├── pyproject.toml
 │   └── .env.example
@@ -244,7 +283,9 @@ nl2bi/
 │   │   │   ├── QueryInput.tsx     # 查询输入
 │   │   │   ├── ResultDisplay.tsx  # 结果展示（SQL + 表格 + 图表）
 │   │   │   ├── ChatPanel.tsx      # 数据问答对话
-│   │   │   └── QueryHistory.tsx   # 查询历史
+│   │   │   ├── QueryHistory.tsx   # 查询历史
+│   │   │   ├── LoginScreen.tsx    # 登录页
+│   │   │   └── ProductContextPanel.tsx # 数据源/语义层/报表工作区
 │   │   ├── services/
 │   │   │   └── api.ts             # API 调用封装
 │   │   ├── types/
@@ -260,11 +301,36 @@ nl2bi/
 
 ## 📚 API 文档
 
+除 `/api/auth/login` 外，业务接口默认需要 `Authorization: Bearer <token>`。
+
+### 登录
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+
+{
+  "username": "admin",
+  "password": "admin123"
+}
+```
+
+响应：
+
+```json
+{
+  "token": "...",
+  "username": "admin",
+  "role": "admin"
+}
+```
+
 ### 自然语言查询
 
 ```http
 POST /api/query
 Content-Type: application/json
+Authorization: Bearer <token>
 
 {
   "query": "查询每个地区的销售总额"
@@ -275,6 +341,7 @@ Content-Type: application/json
 
 ```json
 {
+  "query_id": 1,
   "sql": "SELECT region, SUM(amount) AS total_sales FROM sales GROUP BY region",
   "data": [
     {"region": "华东", "total_sales": 1872808.0},
@@ -284,6 +351,7 @@ Content-Type: application/json
     "title": {"text": "各区域销售总额对比"},
     "series": [{"type": "bar", "data": [...]}]
   },
+  "insight_summary": "本次查询返回 6 行数据；total_sales 的最大值为 1,872,808...",
   "error": null,
   "execution_time": 12.5,
   "retry_count": 0
@@ -295,6 +363,7 @@ Content-Type: application/json
 ```http
 POST /api/chat
 Content-Type: application/json
+Authorization: Bearer <token>
 
 {
   "message": "这些数据的最大值是多少？",
@@ -309,12 +378,92 @@ Content-Type: application/json
 
 ```http
 GET /api/tables
+Authorization: Bearer <token>
 ```
 
 ### 获取 Schema
 
 ```http
 GET /api/schema
+Authorization: Bearer <token>
+```
+
+### 数据源管理
+
+```http
+GET /api/data-sources
+Authorization: Bearer <token>
+```
+
+```http
+POST /api/data-sources/test
+Content-Type: application/json
+Authorization: Bearer <admin-token>
+
+{
+  "database_url": "sqlite:///./data.db"
+}
+```
+
+```http
+POST /api/data-sources
+Content-Type: application/json
+Authorization: Bearer <admin-token>
+
+{
+  "name": "生产销售库",
+  "kind": "postgresql",
+  "database_url": "postgresql://user:password@host:5432/dbname",
+  "activate": true
+}
+```
+
+### 语义层
+
+```http
+GET /api/semantic-layer
+Authorization: Bearer <token>
+```
+
+```http
+PUT /api/semantic-layer/sales/amount
+Content-Type: application/json
+Authorization: Bearer <admin-token>
+
+{
+  "display_name": "销售额",
+  "field_type": "metric",
+  "description": "订单成交金额，默认用于销售规模分析",
+  "is_queryable": true
+}
+```
+
+### 查询审计与报表
+
+```http
+GET /api/query-history?limit=50
+Authorization: Bearer <token>
+```
+
+```http
+POST /api/reports
+Content-Type: application/json
+Authorization: Bearer <token>
+
+{
+  "name": "地区销售总额",
+  "description": "按区域汇总销售额",
+  "query": "查询每个地区的销售总额",
+  "sql": "SELECT ...",
+  "data": [],
+  "echarts_config": {},
+  "insight_summary": "本次查询返回 6 行数据..."
+}
+```
+
+```http
+GET /api/reports
+Authorization: Bearer <token>
 ```
 
 ---
@@ -348,6 +497,9 @@ GET /api/schema
 | `OPENAI_API_KEY` | API 密钥 | （必填） |
 | `OPENAI_API_BASE` | API 基础 URL | `https://api.openai.com/v1` |
 | `OPENAI_MODEL` | 模型名称 | `gpt-4o-mini` |
+| `DATABASE_URL` | 默认分析数据源 URL | `sqlite:///:memory:` |
+| `APP_DATABASE_URL` | 应用元数据库 URL，用于保存数据源、语义层、审计和报表 | `sqlite:///./nl2bi_app.db` |
+| `AUTH_USERS` | 登录用户配置，格式 `用户名:密码:角色;...` | `admin:admin123:admin;analyst:analyst123:analyst` |
 | `APP_PORT` | 后端端口 | `8000` |
 | `DEBUG` | 调试模式 | `True` |
 | `MAX_RETRIES` | 最大重试次数 | `3` |
@@ -380,6 +532,22 @@ A: 检查 `backend/.env` 文件是否已创建并填入有效的 API Key。
 **Q: 前端显示 `Failed to fetch`**
 
 A: 确保后端服务已启动。访问 http://localhost:8000/health 验证。
+
+**Q: 登录账号是什么？**
+
+A: 默认管理员账号是 `admin / admin123`，分析员账号是 `analyst / analyst123`。生产部署必须通过 `AUTH_USERS` 修改默认密码。
+
+**Q: 登录后接口仍返回 401**
+
+A: 前端会把 token 存在浏览器 localStorage。退出后重新登录；如果后端重启，内存 token 会失效，也需要重新登录。
+
+**Q: 如何接入真实数据库？**
+
+A: 管理员登录后在「业务工作区」填写 SQLAlchemy URL 并点击「保存激活」。也可以通过 `DATABASE_URL` 指定默认数据源。外部数据源只读取 schema，不会自动写入示例数据。
+
+**Q: 报表和查询历史保存在哪里？**
+
+A: 保存在 `APP_DATABASE_URL` 指向的应用元数据库中，默认是后端目录下的 `nl2bi_app.db`。
 
 **Q: 查询返回"图表配置解析失败"**
 

@@ -3,10 +3,14 @@ export interface QueryRequest {
 }
 
 export interface QueryResponse {
+  query_id?: number;
   sql?: string;
   data?: Record<string, unknown>[];
   echarts_config?: Record<string, unknown>;
+  insight_summary?: string;
   error?: string;
+  error_detail?: string;
+  suggestions?: string[];
   execution_time?: number;
   retry_count?: number;
 }

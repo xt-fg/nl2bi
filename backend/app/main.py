@@ -5,8 +5,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.endpoints import router as api_router
-from app.core.config import APP_HOST, APP_PORT, DEBUG
+from app.core.config import APP_HOST, APP_PORT, DATABASE_URL, DEBUG
 from app.utils.database import db_manager
+from app.utils.metadata import metadata_manager
 
 # 配置日志
 logging.basicConfig(
@@ -23,6 +24,12 @@ async def lifespan(app: FastAPI):
     logger.info("正在初始化数据库...")
     db_manager.initialize()
     logger.info("数据库初始化完成，共 %d 张表", len(db_manager.get_tables()))
+    logger.info("正在初始化应用元数据...")
+    metadata_manager.initialize()
+    active_source = metadata_manager.get_active_data_source()
+    if active_source and active_source.get("connection_url") != DATABASE_URL:
+        logger.info("切换到已激活数据源: %s", active_source["connection_label"])
+        db_manager.switch_database(active_source["connection_url"])
     yield
     logger.info("应用关闭")
 

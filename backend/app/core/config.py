@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # 数据库配置
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///:memory:")
+APP_DATABASE_URL = os.getenv("APP_DATABASE_URL", "sqlite:///./nl2bi_app.db")
 
 # OpenAI 配置
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
@@ -21,6 +22,10 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("APP_PORT", "8000"))
 DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+AUTH_USERS = os.getenv(
+    "AUTH_USERS",
+    "admin:admin123:admin;analyst:analyst123:analyst",
+)
 
 # 重试配置
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))

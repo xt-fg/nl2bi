@@ -12,26 +12,50 @@ logger = logging.getLogger(__name__)
 
 
 class DatabaseManager:
-    """数据库管理器，用于管理 SQLite 内存数据库"""
+    """数据库管理器，用于管理当前分析数据源"""
 
     def __init__(self):
         self.engine: Optional[Engine] = None
+        self.database_url = DATABASE_URL
 
-    def initialize(self):
+    def initialize(self, database_url: Optional[str] = None):
         """初始化数据库连接"""
-        if DATABASE_URL == "sqlite:///:memory:":
+        self.database_url = database_url or DATABASE_URL
+        if self.database_url == "sqlite:///:memory:":
             # 内存数据库需要 StaticPool 保证多线程共享同一份数据
             self.engine = create_engine(
-                DATABASE_URL,
+                self.database_url,
                 echo=False,
                 connect_args={"check_same_thread": False},
                 poolclass=StaticPool,
             )
+            self._create_tables()
+            self._insert_sample_data()
         else:
-            self.engine = create_engine(DATABASE_URL, echo=False)
-        self._create_tables()
-        self._insert_sample_data()
+            self.engine = create_engine(self.database_url, echo=False)
+            self.test_connection(self.database_url)
         logger.info("数据库初始化完成")
+
+    def switch_database(self, database_url: str):
+        """切换当前分析数据源"""
+        self.test_connection(database_url)
+        self.initialize(database_url)
+
+    @staticmethod
+    def test_connection(database_url: str) -> None:
+        """测试数据库连接"""
+        kwargs: Dict[str, Any] = {}
+        if database_url == "sqlite:///:memory:":
+            kwargs = {
+                "connect_args": {"check_same_thread": False},
+                "poolclass": StaticPool,
+            }
+        engine = create_engine(database_url, echo=False, **kwargs)
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+        finally:
+            engine.dispose()
 
     def _create_tables(self):
         """创建表结构"""
@@ -298,20 +322,27 @@ class DatabaseManager:
         tables = []
         with self.engine.connect() as conn:
             # 获取表名
-            result = conn.execute(
-                text(
-                    """
+            inspector_query = text(
+                """
                 SELECT name FROM sqlite_master
                 WHERE type='table' AND name NOT LIKE 'sqlite_%'
-            """
-                )
+                """
             )
-            table_names = [row[0] for row in result.fetchall()]
+            try:
+                result = conn.execute(inspector_query)
+                table_names = [row[0] for row in result.fetchall()]
+            except Exception:
+                from sqlalchemy import inspect
+                table_names = inspect(self.engine).get_table_names()
 
             for table_name in table_names:
                 # 获取列信息
-                result = conn.execute(text(f"PRAGMA table_info({table_name})"))
-                columns = [row[1] for row in result.fetchall()]
+                try:
+                    result = conn.execute(text(f"PRAGMA table_info({table_name})"))
+                    columns = [row[1] for row in result.fetchall()]
+                except Exception:
+                    from sqlalchemy import inspect
+                    columns = [column["name"] for column in inspect(self.engine).get_columns(table_name)]
                 tables.append({"name": table_name, "columns": columns})
 
         return tables

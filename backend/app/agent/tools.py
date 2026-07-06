@@ -69,7 +69,7 @@ SQL: SELECT * FROM sales WHERE sale_date >= '2025-01-01' AND sale_date < '2026-0
 7. 列名和表名必须与 schema 完全一致
 8. 对于日期过滤，使用 sale_date >= 'YYYY-MM-DD' 格式
 9. 产品名称在 sales 表的 product 列，类别在 category 列
-{{error_context}}
+{error_context}
 
 用户查询: {{query}}
 
@@ -122,7 +122,7 @@ def generate_sql(schema: str, query: str, errors: list[str] = None) -> str:
     prompt = create_text2sql_prompt(schema, errors, column_samples)
     chain = prompt | llm | StrOutputParser()
 
-    result = chain.invoke({"query": query, "error_context": ""})
+    result = chain.invoke({"query": query})
     return _clean_sql_output(result)
 
 

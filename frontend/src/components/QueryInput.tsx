@@ -23,76 +23,64 @@ const QueryInput: React.FC<QueryInputProps> = ({ onSubmit, isLoading }) => {
   ];
 
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-      <h2 className="text-lg font-semibold text-gray-800 mb-4">
-        自然语言查询
-      </h2>
+    <div className="card-surface rounded-lg p-5">
+      <div className="mb-4">
+        <p className="panel-eyebrow">Ask</p>
+        <h2 className="panel-title mt-1">自然语言查询</h2>
+      </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
+        <label className="block">
+          <span className="sr-only">查询内容</span>
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="输入您的查询需求，例如：查询每个地区的销售总额"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-all duration-200"
-            rows={3}
+            placeholder="例如：查询每个地区的销售总额"
+            className="min-h-32 w-full resize-none rounded-lg border border-slate-200 bg-slate-50/80 px-4 py-3 text-sm leading-6 text-slate-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-4 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
+            rows={5}
             disabled={isLoading}
           />
-        </div>
+        </label>
 
-        <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-slate-500">常用问题</p>
           <div className="flex flex-wrap gap-2">
-            {exampleQueries.map((example, index) => (
+            {exampleQueries.map((example) => (
               <button
-                key={index}
+                key={example}
                 type="button"
                 onClick={() => setQuery(example)}
-                className="px-3 py-1 text-sm bg-gray-100 text-gray-700 rounded-full hover:bg-gray-200 transition-colors duration-200"
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-left text-xs font-medium text-slate-600 transition hover:border-blue-200 hover:bg-blue-50 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                 disabled={isLoading}
               >
                 {example}
               </button>
             ))}
           </div>
-
-          <button
-            type="submit"
-            disabled={!query.trim() || isLoading}
-            className={`px-6 py-2 rounded-lg font-medium transition-all duration-200 ${
-              !query.trim() || isLoading
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow-md'
-            }`}
-          >
-            {isLoading ? (
-              <span className="flex items-center">
-                <svg
-                  className="animate-spin -ml-1 mr-2 h-4 w-4 text-white"
-                  xmlns="http://www.w3.org/2000/svg"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  ></circle>
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                  ></path>
-                </svg>
-                处理中...
-              </span>
-            ) : (
-              '执行查询'
-            )}
-          </button>
         </div>
+
+        <button
+          type="submit"
+          disabled={!query.trim() || isLoading}
+          className={`flex h-11 w-full items-center justify-center gap-2 rounded-lg px-4 text-sm font-bold transition ${
+            !query.trim() || isLoading
+              ? 'cursor-not-allowed bg-slate-200 text-slate-500'
+              : 'bg-slate-950 text-white shadow-sm hover:bg-blue-700'
+          }`}
+        >
+          {isLoading && (
+            <svg
+              className="h-4 w-4 animate-spin"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+              <path className="opacity-80" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.37 0 0 5.37 0 12h4z" />
+            </svg>
+          )}
+          {isLoading ? '分析中' : '执行查询'}
+        </button>
       </form>
     </div>
   );
