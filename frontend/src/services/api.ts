@@ -105,7 +105,7 @@ export interface QueryRecord {
   sql?: string;
   status: string;
   row_count: number;
-  execution_time?: number;
+  execution_time?: number | null;
   retry_count: number;
   error?: string;
   insight_summary?: string;
