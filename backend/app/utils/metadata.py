@@ -30,6 +30,9 @@ DEFAULT_SEMANTIC_FIELDS = [
     ("products", "stock_quantity", "库存数量", "metric", "当前库存数量", True),
 ]
 
+LLM_API_KEY_OVERRIDE_SETTING = "llm_api_key_override"
+LLM_API_BASE_URL_OVERRIDE_SETTING = "llm_api_base_url_override"
+
 
 class MetadataManager:
     """Stores product metadata outside the analytical database."""
@@ -117,6 +120,53 @@ class MetadataManager:
                     updated_at TEXT NOT NULL
                 )
             """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    setting_key TEXT PRIMARY KEY,
+                    setting_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """))
+
+    def get_setting(self, key: str) -> Optional[str]:
+        if not self.engine:
+            raise RuntimeError("元数据引擎未初始化")
+
+        with self.engine.connect() as conn:
+            value = conn.execute(
+                text(
+                    "SELECT setting_value FROM app_settings WHERE setting_key = :key"
+                ),
+                {"key": key},
+            ).scalar()
+        return str(value) if value is not None else None
+
+    def set_setting(self, key: str, value: str) -> None:
+        if not self.engine:
+            raise RuntimeError("元数据引擎未初始化")
+
+        now = datetime.utcnow().isoformat()
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO app_settings (setting_key, setting_value, updated_at)
+                    VALUES (:key, :value, :updated_at)
+                    ON CONFLICT(setting_key) DO UPDATE SET
+                        setting_value = excluded.setting_value,
+                        updated_at = excluded.updated_at
+                """),
+                {"key": key, "value": value, "updated_at": now},
+            )
+
+    def delete_setting(self, key: str) -> None:
+        if not self.engine:
+            raise RuntimeError("元数据引擎未初始化")
+
+        with self.engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM app_settings WHERE setting_key = :key"),
+                {"key": key},
+            )
 
     def _seed_defaults(self) -> None:
         if not self.engine:

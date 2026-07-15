@@ -1,5 +1,6 @@
 import json
 import logging
+import threading
 from typing import Optional
 
 from langchain_openai import ChatOpenAI
@@ -12,21 +13,65 @@ logger = logging.getLogger(__name__)
 
 # LLM 单例
 _llm_instance: Optional[ChatOpenAI] = None
+_llm_api_key_override: Optional[str] = None
+_llm_api_base_url_override: Optional[str] = None
+_llm_lock = threading.RLock()
+
+
+def configure_llm_api_key(api_key: Optional[str]) -> None:
+    """更新运行时 API Key；传入 None 时恢复环境变量配置。"""
+    global _llm_api_key_override, _llm_instance
+    normalized = api_key.strip() if api_key and api_key.strip() else None
+    with _llm_lock:
+        _llm_api_key_override = normalized
+        _llm_instance = None
+
+
+def configure_llm_api_base_url(base_url: Optional[str]) -> None:
+    """更新运行时 API Base URL；传入 None 时恢复环境变量配置。"""
+    global _llm_api_base_url_override, _llm_instance
+    normalized = base_url.strip().rstrip("/") if base_url and base_url.strip() else None
+    with _llm_lock:
+        _llm_api_base_url_override = normalized
+        _llm_instance = None
+
+
+def get_llm_api_key_status() -> dict[str, Optional[str] | bool]:
+    with _llm_lock:
+        key = _llm_api_key_override or OPENAI_API_KEY
+        base_url = _llm_api_base_url_override or OPENAI_API_BASE
+        source = (
+            "override" if _llm_api_key_override else "environment" if key else "missing"
+        )
+        masked_key = f"••••{key[-4:]}" if key and len(key) > 8 else "••••" if key else None
+        return {
+            "configured": bool(key),
+            "source": source,
+            "masked_key": masked_key,
+            "base_url": base_url,
+            "base_url_source": (
+                "override" if _llm_api_base_url_override else "environment"
+            ),
+        }
 
 
 def get_llm() -> ChatOpenAI:
     """获取 LLM 单例"""
     global _llm_instance
-    if _llm_instance is None:
-        logger.info("初始化 LLM 实例: model=%s", OPENAI_MODEL)
-        _llm_instance = ChatOpenAI(
-            model=OPENAI_MODEL,
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_API_BASE,
-            temperature=0,
-            max_tokens=4096,
-        )
-    return _llm_instance
+    with _llm_lock:
+        if _llm_instance is None:
+            api_key = _llm_api_key_override or OPENAI_API_KEY
+            if not api_key:
+                raise RuntimeError("尚未配置 LLM API Key")
+            logger.info("初始化 LLM 实例: model=%s", OPENAI_MODEL)
+            _llm_instance = ChatOpenAI(
+                model=OPENAI_MODEL,
+                api_key=api_key,
+                base_url=_llm_api_base_url_override or OPENAI_API_BASE,
+                temperature=0,
+                max_tokens=4096,
+            )
+        return _llm_instance
 
 
 def create_text2sql_prompt(schema: str, errors: list[str] = None, column_samples: str = "") -> ChatPromptTemplate:

@@ -14,6 +14,8 @@ services:
       - DATABASE_URL=sqlite:///./data/nl2bi_analytics.db
       - APP_DATABASE_URL=sqlite:///./nl2bi_app.db
       - MAX_RETRIES=3
+      - QUERY_MAX_ROWS=${QUERY_MAX_ROWS:-1000}
+      - DATA_SOURCE_STATS_TTL_SECONDS=${DATA_SOURCE_STATS_TTL_SECONDS:-60}
     volumes:
       - ./backend:/app
       - backend_data:/app/data

@@ -32,5 +32,11 @@ AUTH_USERS = os.getenv(
 # 重试配置
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", "3"))
 
+# 查询与统计保护
+QUERY_MAX_ROWS = max(1, int(os.getenv("QUERY_MAX_ROWS", "1000")))
+DATA_SOURCE_STATS_TTL_SECONDS = max(
+    0, int(os.getenv("DATA_SOURCE_STATS_TTL_SECONDS", "60"))
+)
+
 # 示例数据配置
 SAMPLE_DATA_ROWS = int(os.getenv("SAMPLE_DATA_ROWS", "1000"))

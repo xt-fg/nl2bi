@@ -11,7 +11,7 @@ export interface HistoryItem {
 interface QueryHistoryProps {
   history: HistoryItem[];
   onSelect: (query: string) => void;
-  onClear: () => void;
+  onClear?: () => void;
 }
 
 const QueryHistory: React.FC<QueryHistoryProps> = ({ history, onSelect, onClear }) => {
@@ -36,12 +36,14 @@ const QueryHistory: React.FC<QueryHistoryProps> = ({ history, onSelect, onClear 
           <p className="panel-eyebrow">History</p>
           <h3 className="panel-title mt-1">查询历史</h3>
         </div>
-        <button
-          onClick={onClear}
-          className="rounded-md px-2 py-1 text-xs font-semibold text-slate-500 transition hover:bg-red-50 hover:text-red-600"
-        >
-          清空
-        </button>
+        {onClear && (
+          <button
+            onClick={onClear}
+            className="rounded-md px-2 py-1 text-xs font-semibold text-slate-500 transition hover:bg-red-50 hover:text-red-600"
+          >
+            清空
+          </button>
+        )}
       </div>
 
       <div className="subtle-scrollbar max-h-72 space-y-2 overflow-y-auto pr-1">

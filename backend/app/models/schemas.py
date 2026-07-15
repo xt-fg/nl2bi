@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 from typing import Any, Dict, List, Optional
 
 
@@ -24,6 +24,26 @@ class CurrentUserResponse(BaseModel):
     """当前用户"""
     username: str
     role: str
+
+
+class LlmSettingsStatus(BaseModel):
+    """LLM 配置状态，不返回完整密钥"""
+    configured: bool
+    source: str
+    masked_key: Optional[str] = None
+    model: str
+    base_url: str
+    base_url_source: str
+
+
+class LlmApiKeyUpdate(BaseModel):
+    """更新 LLM API Key"""
+    api_key: SecretStr = Field(..., min_length=1, max_length=4096)
+
+
+class LlmBaseUrlUpdate(BaseModel):
+    """更新 LLM API Base URL"""
+    base_url: str = Field(..., min_length=1, max_length=2048)
 
 
 class QueryResponse(BaseModel):

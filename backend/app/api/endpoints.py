@@ -1,29 +1,55 @@
 import asyncio
 import logging
 import time
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.auth import AuthUser, get_current_user, login_user, require_admin
-from app.models.schemas import (
-    LoginRequest, LoginResponse, CurrentUserResponse,
-    QueryRequest, QueryResponse,
-    ChatRequest, ChatResponse,
-    TableInfo, SchemaResponse,
-    SqlExecuteRequest, SqlExecuteResponse,
-    DataSourceInfo, DataSourceCreateRequest, DataSourceTestRequest, DataSourceTestResponse,
-    SemanticField, SemanticFieldUpdate,
-    QueryRecord, ReportCreateRequest, ReportSummary, ReportDetail,
+from app.agent.tools import (
+    configure_llm_api_base_url,
+    configure_llm_api_key,
+    get_llm,
+    get_llm_api_key_status,
 )
 from app.agent.workflow import run_workflow
-from app.agent.tools import get_llm
+from app.core.auth import AuthUser, get_current_user, login_user, require_admin
+from app.core.config import MAX_RETRIES, OPENAI_MODEL
+from app.models.schemas import (
+    ChatRequest,
+    ChatResponse,
+    CurrentUserResponse,
+    DataSourceCreateRequest,
+    DataSourceInfo,
+    DataSourceTestRequest,
+    DataSourceTestResponse,
+    LoginRequest,
+    LoginResponse,
+    LlmApiKeyUpdate,
+    LlmBaseUrlUpdate,
+    LlmSettingsStatus,
+    QueryRecord,
+    QueryRequest,
+    QueryResponse,
+    ReportCreateRequest,
+    ReportDetail,
+    ReportSummary,
+    SchemaResponse,
+    SemanticField,
+    SemanticFieldUpdate,
+    SqlExecuteRequest,
+    SqlExecuteResponse,
+    TableInfo,
+)
+from app.utils.data_source_stats import data_source_stats_cache
 from app.utils.database import db_manager
 from app.utils.insights import generate_insight_summary
-from app.utils.metadata import metadata_manager
-from app.core.config import MAX_RETRIES
-
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from app.utils.metadata import (
+    LLM_API_BASE_URL_OVERRIDE_SETTING,
+    LLM_API_KEY_OVERRIDE_SETTING,
+    metadata_manager,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,18 +68,103 @@ async def me_endpoint(user: AuthUser = Depends(get_current_user)):
     return CurrentUserResponse(username=user.username, role=user.role)
 
 
+def _llm_settings_response() -> LlmSettingsStatus:
+    status = get_llm_api_key_status()
+    return LlmSettingsStatus(
+        configured=bool(status["configured"]),
+        source=str(status["source"]),
+        masked_key=(str(status["masked_key"]) if status["masked_key"] else None),
+        model=OPENAI_MODEL,
+        base_url=str(status["base_url"]),
+        base_url_source=str(status["base_url_source"]),
+    )
+
+
+@router.get("/settings/llm", response_model=LlmSettingsStatus)
+async def get_llm_settings(user: AuthUser = Depends(require_admin)):
+    """获取 LLM 配置状态，不返回完整 API Key。"""
+    return _llm_settings_response()
+
+
+@router.put("/settings/llm/api-key", response_model=LlmSettingsStatus)
+async def update_llm_api_key(
+    request: LlmApiKeyUpdate,
+    user: AuthUser = Depends(require_admin),
+):
+    """保存管理员覆盖的 LLM API Key，并立即用于后续请求。"""
+    api_key = request.api_key.get_secret_value().strip()
+    if not api_key:
+        raise HTTPException(status_code=422, detail="API Key 不能为空")
+    await asyncio.to_thread(
+        metadata_manager.set_setting,
+        LLM_API_KEY_OVERRIDE_SETTING,
+        api_key,
+    )
+    configure_llm_api_key(api_key)
+    return _llm_settings_response()
+
+
+@router.delete("/settings/llm/api-key", response_model=LlmSettingsStatus)
+async def reset_llm_api_key(user: AuthUser = Depends(require_admin)):
+    """删除管理员覆盖值，恢复使用 .env 中的 API Key。"""
+    await asyncio.to_thread(
+        metadata_manager.delete_setting,
+        LLM_API_KEY_OVERRIDE_SETTING,
+    )
+    configure_llm_api_key(None)
+    return _llm_settings_response()
+
+
+@router.put("/settings/llm/base-url", response_model=LlmSettingsStatus)
+async def update_llm_base_url(
+    request: LlmBaseUrlUpdate,
+    user: AuthUser = Depends(require_admin),
+):
+    """保存管理员覆盖的 API Base URL，并立即用于后续请求。"""
+    base_url = request.base_url.strip().rstrip("/")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise HTTPException(status_code=422, detail="Base URL 必须是有效的 HTTP(S) 地址")
+    await asyncio.to_thread(
+        metadata_manager.set_setting,
+        LLM_API_BASE_URL_OVERRIDE_SETTING,
+        base_url,
+    )
+    configure_llm_api_base_url(base_url)
+    return _llm_settings_response()
+
+
+@router.delete("/settings/llm/base-url", response_model=LlmSettingsStatus)
+async def reset_llm_base_url(user: AuthUser = Depends(require_admin)):
+    """删除管理员覆盖值，恢复使用 .env 中的 API Base URL。"""
+    await asyncio.to_thread(
+        metadata_manager.delete_setting,
+        LLM_API_BASE_URL_OVERRIDE_SETTING,
+    )
+    configure_llm_api_base_url(None)
+    return _llm_settings_response()
+
+
 @router.post("/query", response_model=QueryResponse)
-async def query_endpoint(request: QueryRequest, user: AuthUser = Depends(get_current_user)):
+async def query_endpoint(
+    request: QueryRequest, user: AuthUser = Depends(get_current_user)
+):
     """处理自然语言查询，返回 SQL、数据和 Echarts 配置"""
     logger.info("收到查询请求: %s", request.query)
     start_time = time.time()
 
     try:
         base_schema = await asyncio.to_thread(db_manager.get_schema)
-        semantic_context = await asyncio.to_thread(metadata_manager.build_semantic_context)
-        schema = f"{base_schema}\n\n{semantic_context}" if semantic_context else base_schema
+        semantic_context = await asyncio.to_thread(
+            metadata_manager.build_semantic_context
+        )
+        schema = (
+            f"{base_schema}\n\n{semantic_context}" if semantic_context else base_schema
+        )
         result = await asyncio.to_thread(
-            lambda: run_workflow(query=request.query, schema=schema, max_retries=MAX_RETRIES)
+            lambda: run_workflow(
+                query=request.query, schema=schema, max_retries=MAX_RETRIES
+            )
         )
 
         execution_time = time.time() - start_time
@@ -111,7 +222,9 @@ async def query_endpoint(request: QueryRequest, user: AuthUser = Depends(get_cur
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat_endpoint(request: ChatRequest, user: AuthUser = Depends(get_current_user)):
+async def chat_endpoint(
+    request: ChatRequest, user: AuthUser = Depends(get_current_user)
+):
     """基于查询结果进行问答"""
     logger.info("收到聊天请求: %s", request.message)
 
@@ -124,7 +237,9 @@ async def chat_endpoint(request: ChatRequest, user: AuthUser = Depends(get_curre
         data_summary = ""
         if data:
             columns = list(data[0].keys())
-            data_summary = f"查询结果包含 {len(data)} 条数据，列名: {', '.join(columns)}\n"
+            data_summary = (
+                f"查询结果包含 {len(data)} 条数据，列名: {', '.join(columns)}\n"
+            )
             data_summary += "示例数据（前5条）:\n"
             for i, row in enumerate(data[:5]):
                 data_summary += f"  {i+1}. {row}\n"
@@ -159,13 +274,16 @@ async def chat_endpoint(request: ChatRequest, user: AuthUser = Depends(get_curre
 
 
 @router.post("/execute-sql", response_model=SqlExecuteResponse)
-async def execute_sql_endpoint(request: SqlExecuteRequest, user: AuthUser = Depends(get_current_user)):
+async def execute_sql_endpoint(
+    request: SqlExecuteRequest, user: AuthUser = Depends(get_current_user)
+):
     """直接执行 SQL 并返回结果和图表配置"""
     logger.info("收到 SQL 执行请求: %s", request.sql)
     start_time = time.time()
 
     try:
         import pandas as pd
+
         df = await asyncio.to_thread(db_manager.execute_query, request.sql)
 
         if df.empty:
@@ -186,6 +304,7 @@ async def execute_sql_endpoint(request: SqlExecuteRequest, user: AuthUser = Depe
 
         # 生成图表配置
         from app.agent.tools import generate_echarts_config
+
         echarts_config = generate_echarts_config(request.sql, data)
         insight_summary = generate_insight_summary(data)
 
@@ -238,21 +357,14 @@ async def get_schema(user: AuthUser = Depends(get_current_user)):
 async def get_data_sources(user: AuthUser = Depends(get_current_user)):
     """获取已配置数据源，包含当前连接的基础统计"""
     try:
-        sources = metadata_manager.list_data_sources()
-        tables = db_manager.get_tables()
-        total_rows = 0
-        for table in tables:
-            try:
-                df = db_manager.execute_query(f"SELECT COUNT(*) AS count FROM {table['name']}")
-                total_rows += int(df.iloc[0]["count"]) if not df.empty else 0
-            except Exception:
-                logger.exception("统计表行数失败: %s", table["name"])
+        sources = await asyncio.to_thread(metadata_manager.list_data_sources)
+        stats = await data_source_stats_cache.get()
 
         return [
             DataSourceInfo(
                 **source,
-                table_count=len(tables),
-                row_count=total_rows,
+                table_count=stats.table_count if source["status"] == "active" else 0,
+                row_count=stats.row_count if source["status"] == "active" else 0,
             )
             for source in sources
         ]
@@ -292,8 +404,13 @@ async def create_data_source(
         if request.activate:
             await asyncio.to_thread(db_manager.switch_database, request.database_url)
 
-        tables = db_manager.get_tables()
-        return DataSourceInfo(**source, table_count=len(tables), row_count=0)
+        data_source_stats_cache.invalidate()
+        stats = await data_source_stats_cache.get() if request.activate else None
+        return DataSourceInfo(
+            **source,
+            table_count=stats.table_count if stats else 0,
+            row_count=stats.row_count if stats else 0,
+        )
     except Exception as e:
         logger.exception("保存数据源失败")
         raise HTTPException(status_code=500, detail=f"保存数据源失败: {e}")
@@ -303,7 +420,9 @@ async def create_data_source(
 async def get_semantic_layer(user: AuthUser = Depends(get_current_user)):
     """获取字段业务语义层配置"""
     try:
-        return [SemanticField(**field) for field in metadata_manager.list_semantic_fields()]
+        return [
+            SemanticField(**field) for field in metadata_manager.list_semantic_fields()
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取语义层失败: {e}")
 
@@ -331,7 +450,9 @@ async def update_semantic_layer_field(
 
 
 @router.get("/query-history", response_model=list[QueryRecord])
-async def get_persisted_query_history(limit: int = 50, user: AuthUser = Depends(get_current_user)):
+async def get_persisted_query_history(
+    limit: int = 50, user: AuthUser = Depends(get_current_user)
+):
     """获取持久化查询审计记录"""
     try:
         bounded_limit = min(max(limit, 1), 200)
@@ -344,7 +465,9 @@ async def get_persisted_query_history(limit: int = 50, user: AuthUser = Depends(
 
 
 @router.post("/reports", response_model=ReportDetail)
-async def create_report(request: ReportCreateRequest, user: AuthUser = Depends(get_current_user)):
+async def create_report(
+    request: ReportCreateRequest, user: AuthUser = Depends(get_current_user)
+):
     """将当前查询结果保存为报表"""
     try:
         report = metadata_manager.save_report(

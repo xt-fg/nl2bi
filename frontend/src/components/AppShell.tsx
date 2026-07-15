@@ -218,7 +218,7 @@ const AppShell: React.FC<AppShellProps> = ({
         </header>
 
         <main className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          <div className="mx-auto max-w-[1480px]">
+          <div className="w-full">
             <div className="mb-7">
               <p className="panel-eyebrow">{currentPage.eyebrow}</p>
               <h1 className="mt-1 text-2xl font-black tracking-tight text-slate-950 sm:text-3xl">{currentPage.title}</h1>

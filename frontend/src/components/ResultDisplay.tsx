@@ -1,7 +1,10 @@
-import React, { useState, useCallback, useRef } from 'react';
-import ReactECharts from 'echarts-for-react';
+import React, { lazy, Suspense, useCallback, useMemo, useRef, useState } from 'react';
+import ChartErrorBoundary from './ChartErrorBoundary';
+import type { ChartRendererHandle } from './ChartRenderer';
 import type { QueryResponse, SqlExecuteResponse } from '../services/api';
 import apiService from '../services/api';
+
+const ChartRenderer = lazy(() => import('./ChartRenderer'));
 
 type ChartType = 'auto' | 'bar' | 'line' | 'pie' | 'table';
 
@@ -25,7 +28,7 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
   const [reportName, setReportName] = useState('');
   const [isSavingReport, setIsSavingReport] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
-  const chartRef = useRef<ReactECharts>(null);
+  const chartRef = useRef<ChartRendererHandle>(null);
 
   // SQL 编辑相关
   const handleEditStart = useCallback(() => {
@@ -79,9 +82,8 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
 
   // 导出图表为图片
   const exportChartImage = useCallback(() => {
-    const chartInstance = chartRef.current?.getEchartsInstance();
-    if (!chartInstance) return;
-    const url = chartInstance.getDataURL({ type: 'png', pixelRatio: 2 });
+    const url = chartRef.current?.getDataUrl();
+    if (!url) return;
     const a = document.createElement('a');
     a.href = url;
     a.download = `nl2bi_chart_${new Date().toISOString().slice(0, 10)}.png`;
@@ -112,7 +114,7 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
   }, [onSaveReport, reportName, result]);
 
   // 获取当前应该显示的 echarts 配置
-  const getDisplayConfig = useCallback((): Record<string, unknown> | null => {
+  const displayConfig = useMemo((): Record<string, unknown> | null => {
     if (!result?.echarts_config || !result?.data || result.data.length === 0) return null;
     if (chartType === 'table') return null; // 表格模式不显示图表
 
@@ -147,7 +149,7 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
   }, [result, chartType]);
 
   // 判断是否应该显示图表区域
-  const showChart = chartType !== 'table' && getDisplayConfig();
+  const showChart = chartType !== 'table' && displayConfig !== null;
 
   // 加载中
   if (isLoading) {
@@ -285,7 +287,7 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
   const columns = hasData ? Object.keys(result.data![0]) : [];
 
   return (
-    <div className="card-surface rounded-lg p-5 sm:p-6">
+    <div className="card-surface min-w-0 overflow-hidden rounded-lg p-5 sm:p-6">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <p className="panel-eyebrow">Result</p>
@@ -416,12 +418,18 @@ const ResultDisplay: React.FC<ResultDisplayProps> = ({
 
       {showChart && (
         <div className="mb-6 h-[420px] rounded-lg border border-slate-200 bg-white p-3">
-          <ReactECharts
-            ref={chartRef}
-            option={getDisplayConfig()}
-            style={{ height: '100%', width: '100%' }}
-            opts={{ renderer: 'svg' }}
-          />
+          <Suspense fallback={(
+            <div className="flex h-full items-center justify-center text-sm font-semibold text-slate-500">
+              正在加载图表
+            </div>
+          )}>
+            <ChartErrorBoundary
+              key={`${result.query_id ?? result.sql ?? 'result'}-${chartType}`}
+              onUseTable={() => setChartType('table')}
+            >
+              <ChartRenderer ref={chartRef} option={displayConfig!} />
+            </ChartErrorBoundary>
+          </Suspense>
         </div>
       )}
 

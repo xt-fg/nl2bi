@@ -1,25 +1,23 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import AppShell from './components/AppShell';
 import type { PageKey } from './components/AppShell';
 import ChatPanel from './components/ChatPanel';
-import DataAssetsPage from './components/DataAssetsPage';
 import LoginScreen from './components/LoginScreen';
 import QueryHistory from './components/QueryHistory';
-import type { HistoryItem } from './components/QueryHistory';
 import QueryInput from './components/QueryInput';
-import QueryRecordsPage from './components/QueryRecordsPage';
-import ReportsPage from './components/ReportsPage';
 import ResultDisplay from './components/ResultDisplay';
-import SettingsPage from './components/SettingsPage';
+import useWorkspaceData from './hooks/useWorkspaceData';
 import apiService from './services/api';
 import type {
-  DataSourceInfo,
-  QueryRecord,
   QueryResponse,
-  ReportSummary,
   SemanticField,
   SqlExecuteResponse,
 } from './services/api';
+
+const DataAssetsPage = lazy(() => import('./components/DataAssetsPage'));
+const QueryRecordsPage = lazy(() => import('./components/QueryRecordsPage'));
+const ReportsPage = lazy(() => import('./components/ReportsPage'));
+const SettingsPage = lazy(() => import('./components/SettingsPage'));
 
 const pageKeys: PageKey[] = ['analysis', 'reports', 'data-assets', 'query-records', 'settings'];
 
@@ -34,13 +32,21 @@ const App: React.FC = () => {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [result, setResult] = useState<QueryResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [history, setHistory] = useState<HistoryItem[]>([]);
-  const [queryRecords, setQueryRecords] = useState<QueryRecord[]>([]);
   const [currentQuery, setCurrentQuery] = useState('');
-  const [dataSources, setDataSources] = useState<DataSourceInfo[]>([]);
-  const [semanticFields, setSemanticFields] = useState<SemanticField[]>([]);
-  const [reports, setReports] = useState<ReportSummary[]>([]);
-  const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
+  const {
+    dataSources,
+    semanticFields,
+    reports,
+    queryRecords,
+    history,
+    isLoading: isWorkspaceLoading,
+    loadError: workspaceLoadError,
+    refreshDataSources,
+    refreshSemanticFields,
+    refreshReports,
+    refreshQueryRecords,
+    clearWorkspace,
+  } = useWorkspaceData(Boolean(user));
 
   const navigateTo = useCallback((page: PageKey) => {
     setActivePage(page);
@@ -54,26 +60,6 @@ const App: React.FC = () => {
     const syncPage = () => setActivePage(pageFromLocation());
     window.addEventListener('hashchange', syncPage);
     return () => window.removeEventListener('hashchange', syncPage);
-  }, []);
-
-  const refreshWorkspace = useCallback(async () => {
-    const [sources, fields, reportList, records] = await Promise.all([
-      apiService.getDataSources(),
-      apiService.getSemanticLayer(),
-      apiService.getReports(),
-      apiService.getQueryHistory(100),
-    ]);
-    setDataSources(sources);
-    setSemanticFields(fields);
-    setReports(reportList);
-    setQueryRecords(records);
-    setHistory(records.slice(0, 20).map((record) => ({
-      id: String(record.id),
-      query: record.query,
-      timestamp: new Date(record.created_at),
-      hasError: record.status !== 'success',
-      rowCount: record.row_count,
-    })));
   }, []);
 
   useEffect(() => {
@@ -93,40 +79,6 @@ const App: React.FC = () => {
     };
   }, []);
 
-  useEffect(() => {
-    if (!user) return;
-    let isMounted = true;
-    Promise.all([
-      apiService.getDataSources(),
-      apiService.getSemanticLayer(),
-      apiService.getReports(),
-      apiService.getQueryHistory(100),
-    ])
-      .then(([sources, fields, reportList, records]) => {
-        if (!isMounted) return;
-        setDataSources(sources);
-        setSemanticFields(fields);
-        setReports(reportList);
-        setQueryRecords(records);
-        setHistory(records.slice(0, 20).map((record) => ({
-          id: String(record.id),
-          query: record.query,
-          timestamp: new Date(record.created_at),
-          hasError: record.status !== 'success',
-          rowCount: record.row_count,
-        })));
-      })
-      .catch((error) => {
-        console.error('Failed to load workspace metadata', error);
-      })
-      .finally(() => {
-        if (isMounted) setIsWorkspaceLoading(false);
-      });
-    return () => {
-      isMounted = false;
-    };
-  }, [user]);
-
   const handleQuerySubmit = useCallback(async (query: string) => {
     setIsLoading(true);
     setResult(null);
@@ -135,31 +87,15 @@ const App: React.FC = () => {
     try {
       const response = await apiService.query({ query });
       setResult(response);
-      const item: HistoryItem = {
-        id: Date.now().toString(),
-        query,
-        timestamp: new Date(),
-        hasError: !!response.error,
-        rowCount: response.data?.length ?? 0,
-      };
-      setHistory((previous) => [item, ...previous].slice(0, 20));
-      refreshWorkspace().catch((error) => console.error('Failed to refresh workspace', error));
+      refreshQueryRecords().catch((error) => console.error('Failed to refresh query records', error));
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : '查询失败，请稍后重试';
       setResult({ error: errorMessage });
-      const item: HistoryItem = {
-        id: Date.now().toString(),
-        query,
-        timestamp: new Date(),
-        hasError: true,
-        rowCount: 0,
-      };
-      setHistory((previous) => [item, ...previous].slice(0, 20));
-      refreshWorkspace().catch((refreshError) => console.error('Failed to refresh workspace', refreshError));
+      refreshQueryRecords().catch((refreshError) => console.error('Failed to refresh query records', refreshError));
     } finally {
       setIsLoading(false);
     }
-  }, [refreshWorkspace]);
+  }, [refreshQueryRecords]);
 
   const handleRunFromRecord = useCallback((query: string) => {
     navigateTo('analysis');
@@ -196,8 +132,8 @@ const App: React.FC = () => {
       echarts_config: result.echarts_config,
       insight_summary: result.insight_summary,
     });
-    setReports(await apiService.getReports());
-  }, [currentQuery, result]);
+    await refreshReports();
+  }, [currentQuery, refreshReports, result]);
 
   const handleOpenReport = useCallback(async (id: number) => {
     const report = await apiService.getReport(id);
@@ -226,10 +162,14 @@ const App: React.FC = () => {
       database_url: databaseUrl,
       activate: true,
     });
-    await refreshWorkspace();
+    await Promise.all([
+      refreshDataSources(),
+      refreshSemanticFields(),
+      refreshQueryRecords(),
+    ]);
     setResult(null);
     setCurrentQuery('');
-  }, [refreshWorkspace]);
+  }, [refreshDataSources, refreshQueryRecords, refreshSemanticFields]);
 
   const handleUpdateSemanticField = useCallback(async (field: SemanticField) => {
     await apiService.updateSemanticField(field.table_name, field.column_name, {
@@ -238,11 +178,10 @@ const App: React.FC = () => {
       description: field.description,
       is_queryable: field.is_queryable,
     });
-    setSemanticFields(await apiService.getSemanticLayer());
-  }, []);
+    await refreshSemanticFields();
+  }, [refreshSemanticFields]);
 
   const handleLogin = useCallback(async (username: string, password: string) => {
-    setIsWorkspaceLoading(true);
     const response = await apiService.login(username, password);
     setUser({ username: response.username, role: response.role });
   }, []);
@@ -251,14 +190,10 @@ const App: React.FC = () => {
     apiService.setToken(null);
     setUser(null);
     setResult(null);
-    setHistory([]);
-    setQueryRecords([]);
-    setReports([]);
-    setDataSources([]);
-    setSemanticFields([]);
     setCurrentQuery('');
+    clearWorkspace();
     navigateTo('analysis');
-  }, [navigateTo]);
+  }, [clearWorkspace, navigateTo]);
 
   if (isAuthLoading) {
     return (
@@ -280,56 +215,67 @@ const App: React.FC = () => {
       onNavigate={navigateTo}
       onLogout={handleLogout}
     >
-      {activePage === 'analysis' && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
-          <aside className="space-y-6 xl:col-span-4 2xl:col-span-3">
-            <QueryInput onSubmit={handleQuerySubmit} isLoading={isLoading} />
-            <section className="card-surface rounded-lg p-5">
-              <div className="flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="panel-eyebrow">Data source</p>
-                  <h2 className="panel-title mt-1 truncate">{activeSource?.name ?? '尚未配置数据源'}</h2>
-                  <p className="mt-1 truncate text-xs font-medium text-slate-500">{activeSource?.connection_label ?? '请先在数据资产中完成配置'}</p>
-                </div>
-                <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${activeSource?.status === 'active' ? 'bg-emerald-500' : 'bg-amber-400'}`} />
-              </div>
-              <button onClick={() => navigateTo('data-assets')} className="mt-4 text-xs font-bold text-blue-700 transition hover:text-blue-800">
-                查看数据资产 →
-              </button>
-            </section>
-            <QueryHistory history={history.slice(0, 8)} onSelect={handleQuerySubmit} onClear={() => setHistory([])} />
-          </aside>
-
-          <section className="space-y-6 xl:col-span-8 2xl:col-span-9">
-            <ResultDisplay result={result} isLoading={isLoading} onSqlRerun={handleSqlRerun} onSaveReport={handleSaveReport} />
-            <ChatPanel queryResult={result} onSendMessage={handleChatMessage} />
-          </section>
+      {workspaceLoadError && (
+        <p className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+          部分工作区数据加载失败：{workspaceLoadError}
+        </p>
+      )}
+      <Suspense fallback={(
+        <div className="card-surface rounded-xl px-6 py-16 text-center text-sm font-semibold text-slate-500">
+          正在加载页面
         </div>
-      )}
+      )}>
+        {activePage === 'analysis' && (
+          <div className="grid min-w-0 grid-cols-1 gap-6 xl:grid-cols-[minmax(280px,340px)_minmax(0,1fr)]">
+            <aside className="min-w-0 space-y-6">
+              <QueryInput onSubmit={handleQuerySubmit} isLoading={isLoading} />
+              <section className="card-surface rounded-lg p-5">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="panel-eyebrow">Data source</p>
+                    <h2 className="panel-title mt-1 truncate">{activeSource?.name ?? '尚未配置数据源'}</h2>
+                    <p className="mt-1 truncate text-xs font-medium text-slate-500">{activeSource?.connection_label ?? '请先在数据资产中完成配置'}</p>
+                  </div>
+                  <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${activeSource?.status === 'active' ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+                </div>
+                <button onClick={() => navigateTo('data-assets')} className="mt-4 text-xs font-bold text-blue-700 transition hover:text-blue-800">
+                  查看数据资产 →
+                </button>
+              </section>
+              <QueryHistory history={history.slice(0, 8)} onSelect={handleQuerySubmit} />
+            </aside>
 
-      {activePage === 'reports' && (
-        <ReportsPage reports={reports} isLoading={isWorkspaceLoading} onOpenReport={handleOpenReport} onStartAnalysis={() => navigateTo('analysis')} />
-      )}
+            <section className="min-w-0 space-y-6">
+              <ResultDisplay result={result} isLoading={isLoading} onSqlRerun={handleSqlRerun} onSaveReport={handleSaveReport} />
+              <ChatPanel queryResult={result} onSendMessage={handleChatMessage} />
+            </section>
+          </div>
+        )}
 
-      {activePage === 'data-assets' && (
-        <DataAssetsPage
-          dataSources={dataSources}
-          semanticFields={semanticFields}
-          canManage={user.role === 'admin'}
-          isLoading={isWorkspaceLoading}
-          onTestDataSource={handleTestDataSource}
-          onCreateDataSource={handleCreateDataSource}
-          onUpdateSemanticField={handleUpdateSemanticField}
-        />
-      )}
+        {activePage === 'reports' && (
+          <ReportsPage reports={reports} isLoading={isWorkspaceLoading} onOpenReport={handleOpenReport} onStartAnalysis={() => navigateTo('analysis')} />
+        )}
 
-      {activePage === 'query-records' && (
-        <QueryRecordsPage records={queryRecords} isLoading={isWorkspaceLoading} onRunAgain={handleRunFromRecord} />
-      )}
+        {activePage === 'data-assets' && (
+          <DataAssetsPage
+            dataSources={dataSources}
+            semanticFields={semanticFields}
+            canManage={user.role === 'admin'}
+            isLoading={isWorkspaceLoading}
+            onTestDataSource={handleTestDataSource}
+            onCreateDataSource={handleCreateDataSource}
+            onUpdateSemanticField={handleUpdateSemanticField}
+          />
+        )}
 
-      {activePage === 'settings' && (
-        <SettingsPage username={user.username} role={user.role} activeSource={activeSource} onNavigate={navigateTo} />
-      )}
+        {activePage === 'query-records' && (
+          <QueryRecordsPage records={queryRecords} isLoading={isWorkspaceLoading} onRunAgain={handleRunFromRecord} />
+        )}
+
+        {activePage === 'settings' && (
+          <SettingsPage username={user.username} role={user.role} activeSource={activeSource} onNavigate={navigateTo} />
+        )}
+      </Suspense>
     </AppShell>
   );
 };

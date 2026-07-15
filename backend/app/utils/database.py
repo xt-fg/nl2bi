@@ -1,16 +1,17 @@
 import logging
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
-from typing import List, Dict, Any, Optional
 
 from app.core.config import (
     DATA_DIR,
     DATABASE_URL,
     DEFAULT_DATABASE_URL,
+    QUERY_MAX_ROWS,
     SAMPLE_DATA_ROWS,
 )
 
@@ -149,8 +150,9 @@ class DatabaseManager:
                 return
 
         # 生成示例数据
-        import numpy as np
         from datetime import datetime, timedelta
+
+        import numpy as np
 
         np.random.seed(42)
         row_count = SAMPLE_DATA_ROWS
@@ -296,10 +298,12 @@ class DatabaseManager:
 
             conn.commit()
 
-    def execute_query(self, sql: str) -> pd.DataFrame:
+    def execute_query(self, sql: str, max_rows: int = QUERY_MAX_ROWS) -> pd.DataFrame:
         """执行 SQL 查询并返回 DataFrame"""
         if not self.engine:
             raise RuntimeError("数据库引擎未初始化")
+        if max_rows < 1:
+            raise ValueError("max_rows 必须大于 0")
 
         logger.debug("执行 SQL: %s", sql)
         self._check_sql_safety(sql)
@@ -307,9 +311,14 @@ class DatabaseManager:
             with self.engine.connect() as conn:
                 result = conn.execute(text(sql))
                 columns = result.keys()
-                data = result.fetchall()
+                rows = result.fetchmany(max_rows + 1)
+                is_truncated = len(rows) > max_rows
+                data = rows[:max_rows]
                 df = pd.DataFrame(data, columns=columns)
-                logger.debug("查询返回 %d 行", len(df))
+                if is_truncated:
+                    logger.warning("查询结果超过 %d 行，已截断", max_rows)
+                else:
+                    logger.debug("查询返回 %d 行", len(df))
                 return df
         except Exception as e:
             logger.error("SQL 执行错误: %s", e)

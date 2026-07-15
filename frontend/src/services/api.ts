@@ -74,6 +74,15 @@ export interface DataSourceTestResponse {
   message: string;
 }
 
+export interface LlmSettingsStatus {
+  configured: boolean;
+  source: 'override' | 'environment' | 'missing';
+  masked_key?: string;
+  model: string;
+  base_url: string;
+  base_url_source: 'override' | 'environment';
+}
+
 export interface DataSourceCreateRequest {
   name: string;
   kind?: string;
@@ -220,6 +229,36 @@ class ApiService {
 
   async getSchema(): Promise<SchemaResponse> {
     return this.request<SchemaResponse>('/api/schema');
+  }
+
+  async getLlmSettings(): Promise<LlmSettingsStatus> {
+    return this.request<LlmSettingsStatus>('/api/settings/llm');
+  }
+
+  async updateLlmApiKey(api_key: string): Promise<LlmSettingsStatus> {
+    return this.request<LlmSettingsStatus>('/api/settings/llm/api-key', {
+      method: 'PUT',
+      body: JSON.stringify({ api_key }),
+    });
+  }
+
+  async resetLlmApiKey(): Promise<LlmSettingsStatus> {
+    return this.request<LlmSettingsStatus>('/api/settings/llm/api-key', {
+      method: 'DELETE',
+    });
+  }
+
+  async updateLlmBaseUrl(base_url: string): Promise<LlmSettingsStatus> {
+    return this.request<LlmSettingsStatus>('/api/settings/llm/base-url', {
+      method: 'PUT',
+      body: JSON.stringify({ base_url }),
+    });
+  }
+
+  async resetLlmBaseUrl(): Promise<LlmSettingsStatus> {
+    return this.request<LlmSettingsStatus>('/api/settings/llm/base-url', {
+      method: 'DELETE',
+    });
   }
 
   async healthCheck(): Promise<{ status: string; version: string }> {
